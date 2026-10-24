@@ -31,4 +31,6 @@ adb shell am start -n dev.podcast.siwcspike/.MainActivity
 
 This uses the machine's standard Android debug keystore for both build variants.
 It is not a publishing configuration. Never add API keys or ChatGPT/Codex tokens.
-See ../docs/ANDROID_DEVICE_TESTING.md for device setup and testing steps.
+See [device testing](../docs/ANDROID_DEVICE_TESTING.md),
+[v0 code review](../docs/CODE_REVIEW_V0_2026-10-25.md), and
+[known errors and fixes](../docs/SIWC_ERROR_LOG.md).

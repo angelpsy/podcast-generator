@@ -2,7 +2,7 @@
 
 Дата настройки: 24 октября 2026 года. Mac: Apple Silicon (`arm64`), macOS 26.6.2. Свободное место перед настройкой: около 248 GiB.
 
-Стек изменён на React Native + TypeScript. Общие Android-инструменты, NDK/CMake и npm-зависимости React Native установлены; проверки инструментов прошли успешно. После подготовки среды создан первый прототип в `mobile/`; актуальная сборка и приёмка описаны в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md). Вход SIWC на телефоне ещё не выполнялся. Проверки предыдущей Kotlin-конфигурации не считаются проверками сборки React Native.
+Стек изменён на React Native + TypeScript. Общие Android-инструменты, NDK/CMake и npm-зависимости React Native установлены; проверки инструментов прошли успешно. После подготовки среды создан первый прототип в `mobile/`; актуальная сборка и приёмка описаны в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md). 25 октября на Pixel подтверждены вход, ответ, выход и повторный вход; см. [отчёт устройства](DEVICE_TEST_2026-10-25.md). Проверки предыдущей Kotlin-конфигурации не считаются проверками сборки React Native.
 
 ## Установлено и проверено
 
@@ -16,7 +16,7 @@
 | Android Command-line Tools | 22.0, build 15859902 | `sdkmanager --version` успешно |
 | SDK Platform | Android 36, revision 2 | `android.jar` установлен |
 | SDK Build Tools | 36.0.0 | `aapt2 version` успешно, universal arm64/x86_64 |
-| Platform Tools | 37.0.1, ADB protocol version 1.0.41 | ADB daemon запускается; устройств в списке нет |
+| Platform Tools | 37.0.1, ADB protocol version 1.0.41 | ADB работает; подключение Pixel и установка APK подтверждены 25 октября |
 | Gradle RN-шаблона | 9.3.1, .tooling/gradle-9.3.1 | SHA-256 совпала; запуск на Java 17 успешен |
 | Gradle предыдущего этапа | 8.13 | Запуск на JDK 17 успешен; SHA-256 официального дистрибутива проверен |
 | AGP / Kotlin предыдущего этапа | 8.13.2 / 2.2.21 | Загружены; временная конфигурация зависимостей отработала |
@@ -30,25 +30,25 @@ JDK: `/Users/first/Library/Java/JavaVirtualMachines/jdk-17.0.20.1+1/Contents/Hom
 
 ## Выполненные проверки и границы
 
-- `bash tools/android-doctor.sh` завершился с кодом 0. `adb devices -l` вернул пустой список: подключение Pixel ещё предстоит.
+- `bash tools/android-doctor.sh` завершился с кодом 0. При настройке 24 октября `adb devices -l` вернул пустой список; 25 октября Pixel подключён, разрешение подтверждено и приложение установлено.
 - Прежний standalone prefetch (скрипт теперь удалён): `BUILD SUCCESSFUL`, 36 артефактов, проверка Android AAR metadata прошла для SDK 36. Тогда был использован временный library-проект без исходников; Android-приложение не создавалось.
 - Проверены синтаксис трёх shell-скриптов и относительные ссылки документации.
-- После реализации успешно выполнены Codegen, компиляция Kotlin/JNI, JVM unit tests, Android lint и сборки debug/release через проектный Wrapper. Запуск IDE и сквозной тест на телефоне ещё не выполнены; см. [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+- После реализации успешно выполнены Codegen, компиляция Kotlin/JNI, JVM unit tests, Android lint и сборки debug/release через проектный Wrapper. Запуск IDE отдельно не проверялся; сквозной тест на телефоне выполнен 25 октября; см. [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 - Известные предупреждения инструментов: `sdkmanager` помечен deprecated в пользу Android CLI, но выполняется успешно; AGP сообщает о новой версии SDK XML и о deprecated Gradle features. Эти проверки завершились успешно. Это предупреждения предыдущего standalone-этапа. Для React Native используется Wrapper его шаблона, а не Gradle 8.13.
 
 Локальные логи (игнорируются Git): `.tooling/android-doctor.log`, `.tooling/dependencies.log`, `.tooling/sdk-install.log`, `.tooling/sdk-licenses.log`. Они относятся только к установке, пользовательских OAuth-данных в них нет.
 
 ## База React Native и текущая подготовка
 
-React Native 0.86.3, React 19.2.3, Community CLI 20.1.0. Опубликованный npm-шаблон `@react-native-community/template@0.86.3` проверен: compile/target SDK 36, Build Tools 36.0.0, NDK 27.1.12297006, Kotlin 2.1.20, Wrapper Gradle 9.3.1. AGP задаёт RNGP; catalog установленного `@react-native/gradle-plugin` подтверждает AGP 8.12.0 и Kotlin 2.1.20. При реализации сверить фактический dependency graph и не смешивать его с прежним Gradle 8.13/AGP 8.13.2.
+React Native 0.86.3, React 19.2.3, Community CLI 20.1.0. Опубликованный npm-шаблон `@react-native-community/template@0.86.3` проверен: compile/target SDK 36, Build Tools 36.0.0, NDK 27.1.12297006, Kotlin 2.1.20, Wrapper Gradle 9.3.1. AGP задаёт RNGP; catalog установленного `@react-native/gradle-plugin` подтверждает AGP 8.12.0 и Kotlin 2.1.20. Приложение собрано с этой конфигурацией; прежний Gradle 8.13/AGP 8.13.2 не используется.
 
 SDK 37 из первоначально рассмотренного шаблона 0.87 текущий SDK Manager не нашёл; выбран поддерживаемый RN 0.86 с доступным SDK 36. Источники и архитектура — в [спецификации](ANDROID_SIWC_SPEC.md).
 
 Node.js доступен в `/Users/first/.nvm/versions/node/v24.16.0/bin/node`. `source tools/android-env.sh` выбирает этот Node вместе с SDK и JDK в текущем shell. Профили пользователя не меняются.
 
-`tools/prefetch-react-native.sh` подготавливает зависимости опубликованного RN-шаблона в игнорируемой `.tooling/react-native-dependencies/` с локальным package-lock, без install scripts. Это вспомогательный кэш, а не приложение. Подготовка завершена: установлены 866 npm-пакетов без install scripts. Проверены React Native 0.86.3, React 19.2.3, TypeScript 5.9.3, Metro 0.84.6 и запуск CLI 20.1.0. npm сообщил о deprecated транзитивных dev-зависимостях шаблона; полная проверка приложения пока не выполнялась. В `mobile/` уже есть собственный npm lockfile; установка зависимостей, Codegen и Android-сборка выполнены.
+`tools/prefetch-react-native.sh` подготавливает зависимости опубликованного RN-шаблона в игнорируемой `.tooling/react-native-dependencies/` с локальным package-lock, без install scripts. Это вспомогательный кэш, а не приложение. Подготовка завершена: установлены 866 npm-пакетов без install scripts. Проверены React Native 0.86.3, React 19.2.3, TypeScript 5.9.3, Metro 0.84.6 и запуск CLI 20.1.0. npm сообщил о deprecated транзитивных dev-зависимостях шаблона; на том этапе это ещё не было проверкой приложения. В `mobile/` уже есть собственный npm lockfile; установка зависимостей, Codegen и Android-сборка выполнены.
 
-Обновлённый `tools/android-doctor.sh` завершился с кодом 0: проверены Node/npm, JDK, SDK Manager, CMake 3.22.1, NDK Clang 18.0.2, Gradle 9.3.1, ADB и aapt2. Clang из host-каталога darwin-x86_64 успешно запускается на этом Mac. Список устройств ADB по-прежнему пуст. Полная Android-сборка RN и Codegen теперь выполнены успешно через `mobile/android/gradlew`. AGP дополнительно установил Build Tools 35.0.0 для зависимого Android library-модуля; приложение использует 36.0.0. Наличие RN debug APK не обеспечивает запуск без Mac: для приёмки нужна сборка со встроенным JS bundle.
+Обновлённый `tools/android-doctor.sh` завершился с кодом 0: проверены Node/npm, JDK, SDK Manager, CMake 3.22.1, NDK Clang 18.0.2, Gradle 9.3.1, ADB и aapt2. Clang из host-каталога darwin-x86_64 успешно запускается на этом Mac. Пустой список ADB относился к подготовке 24 октября; подключение и тест Pixel подтверждены 25 октября. Полная Android-сборка RN и Codegen теперь выполнены успешно через `mobile/android/gradlew`. AGP дополнительно установил Build Tools 35.0.0 для зависимого Android library-модуля; приложение использует 36.0.0. Наличие RN debug APK не обеспечивает запуск без Mac: для приёмки нужна сборка со встроенным JS bundle.
 
 ```sh
 cd /Users/first/Documents/projects/pet/podcast-generator

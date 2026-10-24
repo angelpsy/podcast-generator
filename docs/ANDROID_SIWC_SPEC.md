@@ -1,6 +1,6 @@
 # React Native Android SIWC Spike — техническая спецификация
 
-Дата: 24 октября 2026 года. Статус: первый прототип реализован; фактические проверки отражены в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
+Создано: 24 октября 2026 года. Уточнено по реализации и ревью 25 октября. Первый прототип реализован и проверен на Pixel; фактические проверки отражены в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md), оставшиеся замечания — в [ревью v0](CODE_REVIEW_V0_2026-10-25.md).
 
 ## Цель и границы
 
@@ -25,9 +25,9 @@
 | --- | --- |
 | React Native UI | React Native core components, React hooks; `react-native-safe-area-context` из шаблона для insets |
 | Связь с Android | Собственный типизированный Turbo Native Module `NativeSiwc`, интерфейс генерируется Codegen |
-| Браузер | `androidx.browser:browser:1.9.0`, fallback ACTION_VIEW |
-| Асинхронность Kotlin | `kotlinx-coroutines-android:1.10.2` |
-| HTTP/SSE | OkHttp версии, согласованной с runtime classpath RN; не навязывать прежний OkHttp 5.1.0 без проверки зависимостей |
+| Браузер | Системный ACTION_VIEW; отдельная библиотека браузера в v0 не используется |
+| Асинхронность Kotlin | Single-thread ExecutorService и Handler main looper |
+| HTTP/SSE | OkHttp 4.12.0, совместимый с runtime RN |
 | Проверка JWT | `com.nimbusds:nimbus-jose-jwt:10.10` |
 | Токены | Android Keystore + приватный шифрованный файл; без AsyncStorage |
 
@@ -35,7 +35,7 @@
 
 Источники: [активные версии RN](https://reactnative.dev/releases/), [Community CLI workflow](https://reactnative.dev/docs/getting-started-without-a-framework), [Turbo Modules](https://reactnative.dev/docs/turbo-native-modules-introduction), [Android template](https://github.com/react-native-community/template/tree/0.86-stable/template/android), [RN version catalog](https://github.com/facebook/react-native/blob/v0.86.0/packages/react-native/gradle/libs.versions.toml). Состояние фактической установки — в [LOCAL_ENVIRONMENT.md](LOCAL_ENVIRONMENT.md).
 
-Ветка 0.86 выбрана из активных поддерживаемых веток: её шаблон использует уже доступный SDK 36. Проверка SDK Manager для первоначально рассмотренной 0.87 показала отсутствие `platforms;android-37`; переход на неё не нужен для проверки SIWC. Точную совместимость Android-сборки подтвердим после создания проекта; сейчас проверены опубликованные требования, а не APK.
+Ветка 0.86 выбрана из активных поддерживаемых веток: её шаблон использует уже доступный SDK 36. Проверка SDK Manager для первоначально рассмотренной 0.87 показала отсутствие `platforms;android-37`; переход на неё не нужен для проверки SIWC. Совместимость сборки подтверждена debug/release APK и запуском release на Pixel с Android 17.
 
 ## Экран
 
@@ -54,26 +54,23 @@
 
 | Компонент | Ответственность |
 | --- | --- |
-| `App.tsx` / `SiwcScreen.tsx` | React Native UI, поля, кнопки, ответ |
-| `useSiwc` / reducer | Отображение проверенного native snapshot, подписка на события, пользовательские действия |
-| `specs/NativeSiwc.ts` / Kotlin TurboModule | Типизированная граница JS ↔ Android, Codegen; без передачи токенов |
-| `AuthCoordinator` | Одна активная попытка входа; процессный CoroutineScope, не lifecycleScope экрана |
-| `LoopbackCallbackServer` | Короткоживущий ServerSocket, только `127.0.0.1`, точный путь callback |
-| `OpenAiOAuthClient` | Discovery, URL авторизации, обмен кода, refresh, revocation |
-| `IdTokenValidator` | JWKS, разрешённые алгоритмы и claims |
-| `CredentialStore` | Шифрованное локальное хранение |
-| `OpenAiInferenceClient` | Каталог моделей, POST Responses, SSE |
-| `SafeDiagnostics` | Только разрешённые поля и фиксированные сообщения |
+| `App.tsx` / встроенный `SiwcScreen` | UI, подписка на snapshots, проверка revision, действия |
+| `specs/NativeSiwc.ts`, `SiwcModule.kt`, `SiwcPackage.kt` | Граница JS ↔ Android, Codegen; без передачи токенов |
+| `SiwcCoordinator.kt` | Process-owned singleton, один executor; OAuth, listener, HTTP, refresh, revocation, Responses и snapshots |
+| `Protocol.kt` | Callback-параметры, JWT-проверка через Nimbus, каталог моделей и SSE parsing |
+| `CredentialStore.kt` | Keystore и AtomicFile |
+| `ForegroundGate.kt` | Ожидание возврата из браузера, отмена и тайм-аут |
+| `src/state.ts` | DTO snapshot и экспорт разрешённых диагностических полей |
 
-Нативные зависимости создаются вручную в process-scoped контейнере Application. Источник состояния операций — Kotlin coordinator; React hook отображает его snapshot, а не запускает второй OAuth state machine. UI-состояния: `SignedOut → Authorizing → AwaitingReturn → Validating → SignedInWithoutPlan / Ready → LoadingModels → Ready → Streaming → Completed / Failed / Incomplete`. Ошибка сети сама по себе не превращает `Ready` в `SignedOut`.
+Нативные зависимости создаются вручную в singleton coordinator с applicationContext. Первоначально предполагавшиеся отдельные OAuth/Inference-клиенты и reducer для v0 не понадобились. Источник состояния операций — Kotlin coordinator; React hook отображает его snapshot, а не запускает второй OAuth state machine. UI-состояния: `SignedOut → Authorizing → AwaitingReturn → Validating → SignedInWithoutPlan / Ready → LoadingModels → Ready → Streaming → Completed / Failed / Incomplete`. Ошибка сети сама по себе не превращает `Ready` в `SignedOut`.
 
 ### Контракт TurboModule
 
 Методы: `getSnapshot()`, `signIn()`, `cancel()`, `listModels()`, `sendPrompt(modelSlug, text)`, `signOut()`. Async-операции возвращают Promise; для прогресса и delta — Codegen EventEmitter. В v0 события и snapshots передаются JSON-строками (`EventEmitter<string>`); диагностика собирается JS-функцией `safeDiagnostics`. В JS доступны только безопасные DTO: проверенный email, planEnabled, модели, текст ответа, статусы и безопасные ошибки. `getSnapshot` возвращает и накопленный текст, чтобы потерянное событие не означало потерю ответа.
 
-Подписываться до старта операции. Snapshot и события содержат operation ID и монотонную revision; reducer игнорирует устаревшие события и повторные delta. Снятие подписки освобождает JS listener. Пересоздание React context/Fast Refresh не удаляет native auth session: новый UI переподписывается и сверяется с snapshot. Pending OAuth принадлежит Application, не ReactActivity, hook или экземпляру TurboModule. Если процесс погиб, действует обычный новый вход. Проверять эту границу при Reload отдельно от force-stop.
+Подписываться до старта операции. Snapshot и события содержат operation ID и монотонную revision; React state setter игнорирует устаревшие snapshots; текст передаётся целиком, а не повторно добавляемыми delta. Снятие подписки освобождает JS listener. Пересоздание React context/Fast Refresh не удаляет native auth session: новый UI переподписывается и сверяется с snapshot. Pending OAuth принадлежит Application, не ReactActivity, hook или экземпляру TurboModule. Если процесс погиб, действует обычный новый вход. Проверять эту границу при Reload отдельно от force-stop.
 
-Codegen-спецификация входит в `package.json` через `codegenConfig`; использовать только поддерживаемые Codegen DTO. Автогенерируемые файлы не редактировать. Auth и SSE выполняются на IO executor/coroutine dispatcher; вызовы TurboModule не блокируют UI/JS thread.
+Codegen-спецификация входит в `package.json` через `codegenConfig`; использовать только поддерживаемые Codegen DTO. Автогенерируемые файлы не редактировать. Auth и SSE выполняются на одном IO executor; вызовы TurboModule не блокируют UI/JS thread.
 
 ## Вход и callback
 

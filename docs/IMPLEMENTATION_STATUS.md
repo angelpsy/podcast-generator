@@ -37,6 +37,8 @@ JVM-тесты проверяют неверные/повторённые state,
 
 ## Ограничения v0
 
+Ревью версии `f97b12e`: [CODE_REVIEW_V0_2026-10-25.md](CODE_REVIEW_V0_2026-10-25.md). Открыты R-01 (неполная обработка терминальных ошибок refresh) и R-02 (потеря замены refresh-токена при сбое последующей проверки JWKS). Эти сценарии найдены по коду; на реальном аккаунте ещё не проверены. Исправленные ошибки и способы диагностики: [SIWC_ERROR_LOG.md](SIWC_ERROR_LOG.md).
+
 - Один зарегистрированный аккаунт. Другой аккаунт с тем же client ID отклоняется; интерфейс переключения регистраций пока отсутствует.
 - Браузер открывается через системный ACTION_VIEW. После callback нужно вручную вернуться в приложение.
 - Незавершённая авторизация не переживает убийство процесса; тайм-аут — 5 минут.
@@ -44,7 +46,7 @@ JVM-тесты проверяют неверные/повторённые state,
 - Проблема с защищённым хранилищем требует явного сброса данных/нового входа; автоматического удаления регистрации нет.
 - Доступ подписки для минимального текстового запроса подтверждён на Pixel 25 октября. TTS и генерации подкастов в версии нет.
 
-Release APK: `mobile/android/app/build/outputs/apk/release/app-release.apk`, около 25 MiB. Debug APK: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`, около 45 MiB. Артефакты сборки игнорируются Git. Последняя полная проверка выполнена через проектный Wrapper: `:app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease`, `BUILD SUCCESSFUL`.
+Release APK: `mobile/android/app/build/outputs/apk/release/app-release.apk`, около 25 MiB. Debug APK: `mobile/android/app/build/outputs/apk/debug/app-debug.apk`, около 45 MiB. Артефакты сборки игнорируются Git. При создании v0 собраны оба варианта; после последнего исправления проверены `:app:testDebugUnitTest :app:lintDebug :app:assembleRelease`, `BUILD SUCCESSFUL`. Debug APK после последнего исправления не пересобирался. Проверки в рамках ревью отдельно перечислены в его отчёте.
 
 ## Первый запуск
 
