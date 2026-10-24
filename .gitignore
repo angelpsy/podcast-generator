@@ -1,0 +1,10 @@
+.tooling/
+.gradle/
+**/build/
+local.properties
+*.jks
+*.keystore
+.DS_Store
+node_modules/
+.metro-health-check*
+npm-debug.log*
