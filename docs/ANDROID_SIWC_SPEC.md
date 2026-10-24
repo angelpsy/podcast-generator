@@ -1,6 +1,6 @@
 # React Native Android SIWC Spike — техническая спецификация
 
-Создано: 24 октября 2026 года. Уточнено по реализации и ревью 25 октября. Первый прототип реализован и проверен на Pixel; фактические проверки отражены в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md), оставшиеся замечания — в [ревью v0](CODE_REVIEW_V0_2026-10-25.md).
+Создано: 24 октября 2026 года. Уточнено по реализации и ревью 25 октября. Первый прототип реализован и проверен на Pixel; фактические проверки отражены в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md), история замечаний и их исправлений — в [ревью v0](CODE_REVIEW_V0_2026-10-25.md).
 
 ## Цель и границы
 
@@ -59,6 +59,7 @@
 | `SiwcCoordinator.kt` | Process-owned singleton, один executor; OAuth, listener, HTTP, refresh, revocation, Responses и snapshots |
 | `Protocol.kt` | Callback-параметры, JWT-проверка через Nimbus, каталог моделей и SSE parsing |
 | `CredentialStore.kt` | Keystore и AtomicFile |
+| `RefreshFlow.kt` | Обработка ошибок refresh, pending-ответ до валидации, активация и очистка token record |
 | `ForegroundGate.kt` | Ожидание возврата из браузера, отмена и тайм-аут |
 | `src/state.ts` | DTO snapshot и экспорт разрешённых диагностических полей |
 
@@ -100,6 +101,8 @@ Discovery получать по HTTPS с фиксированного `https://a
 ## Хранение, повторный вход, выход
 
 Хранить проверенную личность, issued client ID, host ID, scopes, срок доступа, access/refresh/ID tokens. Токены шифровать AES-GCM ключом Android Keystore, ciphertext — в приватном `noBackupFilesDir`, новая IV на запись. Host ID и mapping также не восстанавливать из backup на другое устройство. Не хранить секреты в SavedStateHandle, intent extras, URL-журналах или на Mac. При недоступном ключе предложить новый вход.
+
+Ответ refresh до JWKS/проверки отмены сохраняется как `pending_refresh` в существующем зашифрованном record. Следующий запрос сначала завершает pending-валидацию; выход отзывает последний полученный refresh-токен и удаляет pending. Подробности и ограничения — в [журнале ошибок](SIWC_ERROR_LOG.md).
 
 Перед запросом обновить истекающий access token через `refresh_token` grant; обновление сериализовать, новый refresh token сохранять атомарно. При 401 — максимум одно обновление и повтор, кроме терминальных ошибок. При `invalid_grant` и подтверждённой недействительности токена — новый вход с сохранённым client ID. Повторный вход обязан совпасть по проверенному `sub` с сохранённой регистрацией. Для v0 один активный аккаунт; смена пользователя требует явного действия и новой регистрации, не перезаписи чужого mapping.
 

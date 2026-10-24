@@ -170,11 +170,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
 
     private fun safeHttpError(response: Response): Nothing {
         val json = runCatching { JSONObject(response.body?.string()?.take(65_536) ?: "{}") }.getOrNull()
-        val raw = json?.optJSONObject("error")?.optString("code")
-            ?: json?.optString("error") ?: ""
-        val code = if (raw.matches(Regex("subscription_sharing_[a-z_]{1,80}|chatpass_v2_[a-z_]{1,80}")) ||
-            raw in setOf("invalid_grant", "invalid_client", "invalid_refresh_token", "refresh_token_reused")) raw
-            else "http_${response.code}"
+        val code = Protocol.httpErrorCode(json, response.code)
         val requestId = response.header("x-request-id")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,128}")) } ?: ""
         update { it.put("httpStatus", response.code).put("requestId", requestId) }
         throw SafeFailure(code)
@@ -223,16 +219,14 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         }
     }
 
-    private fun saveTokens(response: JSONObject, c: JSONObject, identity: JSONObject? = null) {
-        if (!response.getString("token_type").equals("Bearer", ignoreCase = true)) throw SafeFailure("token_type")
-        val access = response.getString("access_token").takeIf { it.isNotEmpty() } ?: throw SafeFailure("empty_access_token")
-        val next = JSONObject(c.toString()).put("access_token", access)
-            .put("expires_at", System.currentTimeMillis() + response.getLong("expires_in") * 1000)
-            .put("scope", response.optString("scope", c.optString("scope")))
-        for (name in listOf("refresh_token", "id_token")) if (response.has(name)) next.put(name, response.getString(name))
-        identity?.let { next.put("subject", it.getString("subject")).put("email", it.getString("email")) }
-        store.save(next)
+    private fun persistCredentials(next: JSONObject) {
+        // Retain pending rotation in memory even if the disk write fails; never reuse its predecessor.
         credentials = next
+        store.save(next)
+    }
+
+    private fun saveTokens(response: JSONObject, c: JSONObject, identity: JSONObject? = null) {
+        persistCredentials(RefreshFlow.promote(c, response, identity, System.currentTimeMillis()))
     }
 
     fun signIn(done: (String?) -> Unit) = run("Authorizing", done) {
@@ -323,25 +317,23 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     }
 
     private fun refresh() {
-        val c = account()
-        val token = c.optString("refresh_token").takeIf { it.isNotEmpty() } ?: throw SafeFailure("sign_in_required")
-        try {
-            val response = tokenRequest(FormBody.Builder().add("grant_type", "refresh_token")
-                .add("client_id", c.getString("client_id")).add("refresh_token", token).add("resource", Protocol.RESOURCE).build())
-            val identity = if (response.has("id_token")) validate(response.getString("id_token"), c.getString("client_id"), null) else null
-            if (identity != null && identity.getString("subject") != c.getString("subject")) throw SafeFailure("account_mismatch")
-            saveTokens(response, c, identity)
-            update { it.put("planEnabled", planEnabled(account())) }
-        } catch (error: SafeFailure) {
-            if (error.safeCode in setOf("invalid_grant", "invalid_refresh_token", "refresh_token_reused")) clearTokens()
-            throw error
-        }
+        RefreshFlow(
+            read = ::account,
+            persist = ::persistCredentials,
+            clear = ::clearTokens,
+            exchange = { c -> tokenRequest(FormBody.Builder().add("grant_type", "refresh_token")
+                .add("client_id", c.getString("client_id")).add("refresh_token", c.getString("refresh_token"))
+                .add("resource", Protocol.RESOURCE).build()) },
+            validate = { token, client -> validate(token, client, null) },
+            checkCancelled = ::checkCancelled,
+        ).run()
+        update { it.put("planEnabled", planEnabled(account())) }
     }
 
     private fun authorized(build: (String) -> Request): Response {
         if (!connected(account())) throw SafeFailure("sign_in_required")
         if (!planEnabled(account())) throw SafeFailure("plan_not_enabled")
-        if (account().optLong("expires_at") <= System.currentTimeMillis() + 60_000) refresh()
+        if (RefreshFlow.needsRefresh(account(), System.currentTimeMillis())) refresh()
         if (!planEnabled(account())) throw SafeFailure("plan_not_enabled")
         var response = execute(build(account().getString("access_token")))
         if (response.code == 401 && account().optString("refresh_token").isNotEmpty()) {
@@ -414,19 +406,18 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     }
 
     private fun clearTokens() {
-        val c = account()
-        for (name in listOf("access_token", "refresh_token", "id_token", "expires_at", "scope")) c.remove(name)
-        store.save(c)
+        persistCredentials(RefreshFlow.withoutTokens(account()))
         update("SignedOut") { it.put("email", "").put("planEnabled", false).put("models", JSONArray()).put("answer", "") }
     }
 
     fun signOut(done: (String?) -> Unit) = run("SigningOut", done) {
         var revoked = true
         val c = account()
-        if (c.optString("refresh_token").isNotEmpty()) {
+        val refreshToken = RefreshFlow.revocationToken(c)
+        if (refreshToken.isNotEmpty()) {
             revoked = runCatching {
                 execute(Request.Builder().url(config().getString("revocation_endpoint"))
-                    .post(FormBody.Builder().add("token", c.getString("refresh_token"))
+                    .post(FormBody.Builder().add("token", refreshToken)
                         .add("token_type_hint", "refresh_token").add("client_id", c.getString("client_id")).build()).build())
                     .use { it.isSuccessful }
             }.getOrDefault(false)

@@ -23,6 +23,19 @@ internal object Protocol {
     const val SCOPE = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
     const val PLAN_SCOPE = "chatgpt.tokens.use.direct"
 
+    val terminalRefreshErrors = setOf(
+        "invalid_grant", "invalid_refresh_token", "token_expired", "refresh_token_expired",
+        "refresh_token_invalidated", "refresh_token_reused",
+    )
+
+    fun httpErrorCode(json: JSONObject?, status: Int): String {
+        val raw = json?.optJSONObject("error")?.optString("code")
+            ?: json?.optString("error") ?: ""
+        return if (raw in terminalRefreshErrors || raw == "invalid_client" ||
+            raw.matches(Regex("subscription_sharing_[a-z_]{1,80}|chatpass_v2_[a-z_]{1,80}"))) raw
+            else "http_$status"
+    }
+
     fun equal(a: String, b: String) = MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
 
     /** Some SIWC responses omit Content-Type despite carrying normal SSE records. */
