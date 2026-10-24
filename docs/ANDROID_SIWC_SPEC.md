@@ -65,7 +65,7 @@
 | `OpenAiInferenceClient` | Каталог моделей, POST Responses, SSE |
 | `SafeDiagnostics` | Только разрешённые поля и фиксированные сообщения |
 
-Нативные зависимости создаются вручную в process-scoped контейнере Application. Источник состояния операций — Kotlin coordinator; React hook отображает его snapshot, а не запускает второй OAuth state machine. UI-состояния: `SignedOut → Authorizing → Validating → SignedInWithoutPlan / Ready → LoadingModels → Ready → Streaming → Completed / Failed / Incomplete`. Ошибка сети сама по себе не превращает `Ready` в `SignedOut`.
+Нативные зависимости создаются вручную в process-scoped контейнере Application. Источник состояния операций — Kotlin coordinator; React hook отображает его snapshot, а не запускает второй OAuth state machine. UI-состояния: `SignedOut → Authorizing → AwaitingReturn → Validating → SignedInWithoutPlan / Ready → LoadingModels → Ready → Streaming → Completed / Failed / Incomplete`. Ошибка сети сама по себе не превращает `Ready` в `SignedOut`.
 
 ### Контракт TurboModule
 
@@ -94,6 +94,7 @@ Discovery получать по HTTPS с фиксированного `https://a
 - Браузер и приложение работают в личном профиле одного телефона. На Android 17 межпрофильный loopback ограничен: [изменения Android 17](https://developer.android.com/about/versions/17/behavior-changes-all).
 - Listener живёт в процессе приложения, вне Activity; не останавливается на `onStop`, повороте и открытии браузера. Срок ожидания — 5 минут; отмена/успех/истечение срока закрывают сокет и pending attempt.
 - В v0 нет foreground service и обещания переживать убийство процесса. После потери процесса незавершённый вход повторяется с новыми state/nonce/verifier; старый callback не принимается. Проверить это отдельно от обычного переключения в браузер.
+- После callback обмен одноразового кода выполняется только после onHostResume. В фоне coordinator остаётся в AwaitingReturn до 120 секунд, без сохранения code на диск; отмена или тайм-аут прекращают попытку. Это устранило UnknownHostException при повторной авторизации на тестовом Pixel.
 - Ответ callback-страницы: короткий текст «Вход обработан. Вернитесь в приложение» без токенов, отражённых параметров и скриптов. Пользователь закрывает вкладку/нажимает Back или возвращается через список приложений. Не рассчитывать на автоматический запуск Activity из фона.
 - Только GET `/auth/callback`; ограничить заголовки 16 KiB и время чтения соединения 5 сек. Неверные state/путь/дубли параметров отклонять без обмена кода; случайный `/favicon.ico` не завершает попытку. Валидный callback потребляется атомарно один раз.
 - Manifest: `INTERNET`; launcher Activity exported, прочие компоненты закрыты, backup для auth-данных отключён и исключения data extraction. OpenAI-запросы идут только по HTTPS. Входящий raw loopback socket не требует глобального `usesCleartextTraffic=true`. Отдельное HTTP-разрешение debug-варианта для Metro 8081 допустимо только в debug source set; в сборку с включённым JS bundle оно не переносится. Политика браузера независима от приложения.

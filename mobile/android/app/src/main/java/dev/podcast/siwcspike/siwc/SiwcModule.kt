@@ -2,17 +2,29 @@ package dev.podcast.siwcspike.siwc
 
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
+import com.facebook.react.bridge.LifecycleEventListener
 import com.facebook.react.module.annotations.ReactModule
 
 @ReactModule(name = SiwcModule.NAME)
-class SiwcModule(context: ReactApplicationContext) : NativeSiwcSpec(context) {
+class SiwcModule(context: ReactApplicationContext) : NativeSiwcSpec(context), LifecycleEventListener {
     companion object { const val NAME = "Siwc" }
     private val coordinator = SiwcCoordinator.get(context)
     private val listener: (String) -> Unit = { emitOnSnapshot(it) }
 
     override fun getName() = NAME
-    override fun initialize() { super.initialize(); coordinator.subscribe(listener) }
-    override fun invalidate() { coordinator.unsubscribe(listener); super.invalidate() }
+    override fun initialize() {
+        super.initialize()
+        coordinator.subscribe(listener)
+        reactApplicationContext.addLifecycleEventListener(this)
+    }
+    override fun invalidate() {
+        coordinator.unsubscribe(listener)
+        reactApplicationContext.removeLifecycleEventListener(this)
+        super.invalidate()
+    }
+    override fun onHostResume() = coordinator.setForeground(true)
+    override fun onHostPause() = coordinator.setForeground(false)
+    override fun onHostDestroy() = coordinator.setForeground(false)
     private fun completion(promise: Promise): (String?) -> Unit = { error ->
         if (error == null) promise.resolve(null) else promise.reject(error, error)
     }

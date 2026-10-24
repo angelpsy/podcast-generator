@@ -40,6 +40,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
+    private val foregroundGate = ForegroundGate()
     private val cancelled = AtomicBoolean(false)
     private val listeners = CopyOnWriteArraySet<(String) -> Unit>()
     private val store = CredentialStore(context)
@@ -60,6 +61,10 @@ internal class SiwcCoordinator private constructor(private val context: Context)
 
     fun subscribe(listener: (String) -> Unit) { listeners.add(listener) }
     fun unsubscribe(listener: (String) -> Unit) { listeners.remove(listener) }
+    fun setForeground(value: Boolean) {
+        foregroundGate.setForeground(value)
+        Log.i("SiwcSpike", if (value) "App: foreground" else "App: background")
+    }
     @Synchronized fun snapshot(): String = state.toString()
 
     @Synchronized private fun update(stage: String? = null, change: (JSONObject) -> Unit = {}) {
@@ -102,7 +107,8 @@ internal class SiwcCoordinator private constructor(private val context: Context)
             operationId = UUID.randomUUID().toString()
             try {
                 initialize()
-                update(stage) { it.put("error", "").put("requestId", "").put("httpStatus", 0) }
+                update(stage) { it.put("error", "").put("requestId", "").put("httpStatus", 0)
+                    .put("responseContentType", "").put("responseFormat", "") }
                 work()
             } catch (error: Exception) {
                 val safe = if (cancelled.get()) "cancelled" else when (error) {
@@ -111,7 +117,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
                     is java.io.IOException -> "network_error"
                     else -> "invalid_response"
                 }
-                Log.i("SiwcSpike", "Failure: $safe")
+                Log.i("SiwcSpike", "Failure: $safe; exception=${error.javaClass.simpleName}; cause=${error.cause?.javaClass?.simpleName ?: "none"}")
                 update(if (safe == "cancelled") "Cancelled" else "Failed") { it.put("error", safe) }
             } finally {
                 server?.runCatching { close() }; server = null
@@ -138,7 +144,28 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         val active = http.newCall(request)
         call = active
         checkCancelled()
-        return active.execute()
+        val kind = if (request.url.toString() == discovery?.optString("revocation_endpoint")) "revocation" else when (request.url.encodedPath) {
+            "/api/accounts/oauth/token" -> "oauth_token"
+            "/.well-known/jwks.json" -> "jwks"
+            "/.well-known/openid-configuration" -> "discovery"
+            "/v1/models" -> "models"
+            "/v1/responses" -> "responses"
+            else -> "other"
+        }
+        Log.i("SiwcSpike", "Request: $kind; foreground=${foregroundGate.foreground}")
+        try {
+            return active.execute().also { Log.i("SiwcSpike", "HTTP: $kind ${it.code}") }
+        } catch (error: java.io.IOException) {
+            val reason = when {
+                error.message?.contains("closed", ignoreCase = true) == true -> "closed"
+                error.message?.contains("canceled", ignoreCase = true) == true -> "cancelled"
+                error.message?.contains("unexpected end", ignoreCase = true) == true -> "unexpected_end"
+                error.message?.contains("reset", ignoreCase = true) == true -> "reset"
+                else -> "unspecified"
+            }
+            Log.i("SiwcSpike", "Network: $kind ${error.javaClass.simpleName} reason=$reason")
+            throw error
+        }
     }
 
     private fun safeHttpError(response: Response): Nothing {
@@ -231,6 +258,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         checkCancelled()
         main.post {
             if (!cancelled.get()) try {
+                setForeground(false)
                 context.startActivity(Intent(Intent.ACTION_VIEW, uri.build()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             } catch (_: Exception) { cancelled.set(true); listener.runCatching { close() } }
         }
@@ -242,6 +270,9 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         if (id.isBlank() || id == "dynamic_agent_client" || (priorId.isNotEmpty() && id != priorId)) throw SafeFailure("callback_client")
         // Retain the issued ID even if the following exchange is interrupted.
         c.put("client_id", id); store.save(c)
+        update("AwaitingReturn")
+        foregroundGate.await(120_000) { cancelled.get() }
+        checkCancelled()
         update("Validating")
         val tokens = tokenRequest(FormBody.Builder().add("grant_type", "authorization_code").add("client_id", id)
             .add("code", code).add("code_verifier", verifier).add("redirect_uri", redirect).add("resource", Protocol.RESOURCE).build())
@@ -400,6 +431,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
                     .use { it.isSuccessful }
             }.getOrDefault(false)
         }
+        Log.i("SiwcSpike", if (revoked) "Revocation: confirmed" else "Revocation: unconfirmed")
         clearTokens()
         if (!revoked) update { it.put("error", "revocation_unconfirmed") }
     }

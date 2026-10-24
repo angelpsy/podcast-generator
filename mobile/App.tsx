@@ -19,6 +19,7 @@ const stages: Record<string, string> = {
   SignedOut: 'Вход не выполнен',
   Authorizing: 'Завершите вход в браузере и вернитесь сюда',
   Validating: 'Проверка входа и разрешений',
+  AwaitingReturn: 'Вернитесь в приложение для завершения входа',
   SignedInWithoutPlan: 'Вход выполнен, подписка не разрешена',
   Ready: 'Подключено',
   LoadingModels: 'Загрузка моделей',
@@ -33,6 +34,7 @@ const stages: Record<string, string> = {
 const errors: Record<string, string> = {
   consent_denied: 'Разрешение отклонено в браузере.',
   authorization_timeout: 'Время входа истекло. Начните вход заново.',
+  app_return_timeout: 'Время возврата в приложение истекло. Начните вход заново.',
   plan_not_enabled: 'Вход выполнен, но разрешения использовать подписку нет.',
   subscription_sharing_user_not_eligible: 'Использование подписки недоступно выбранному аккаунту или workspace.',
   subscription_sharing_usage_limit_exceeded: 'Достигнут лимит. Проверьте ChatGPT → Settings → Usage.',
