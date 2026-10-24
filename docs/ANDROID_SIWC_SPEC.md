@@ -65,9 +65,11 @@
 
 Нативные зависимости создаются вручную в singleton coordinator с applicationContext. Первоначально предполагавшиеся отдельные OAuth/Inference-клиенты и reducer для v0 не понадобились. Источник состояния операций — Kotlin coordinator; React hook отображает его snapshot, а не запускает второй OAuth state machine. UI-состояния: `SignedOut → Authorizing → AwaitingReturn → Validating → SignedInWithoutPlan / Ready → LoadingModels → Ready → Streaming → Completed / Failed / Incomplete`. Ошибка сети сама по себе не превращает `Ready` в `SignedOut`.
 
+В тестовом экране есть «Обновить сессию»: явный refresh через штатный RefreshFlow, без изменения часов или expiry. Этап `Refreshing` завершается Ready/SignedInWithoutPlan либо ошибкой. Это позволяет проверить ротацию на устройстве отдельно от ожидания истечения токена.
+
 ### Контракт TurboModule
 
-Методы: `getSnapshot()`, `signIn()`, `cancel()`, `listModels()`, `sendPrompt(modelSlug, text)`, `signOut()`. Async-операции возвращают Promise; для прогресса и delta — Codegen EventEmitter. В v0 события и snapshots передаются JSON-строками (`EventEmitter<string>`); диагностика собирается JS-функцией `safeDiagnostics`. В JS доступны только безопасные DTO: проверенный email, planEnabled, модели, текст ответа, статусы и безопасные ошибки. `getSnapshot` возвращает и накопленный текст, чтобы потерянное событие не означало потерю ответа.
+Методы: `getSnapshot()`, `signIn()`, `refreshSession()`, `cancel()`, `listModels()`, `sendPrompt(modelSlug, text)`, `signOut()`. Async-операции возвращают Promise; для прогресса и delta — Codegen EventEmitter. В v0 события и snapshots передаются JSON-строками (`EventEmitter<string>`); диагностика собирается JS-функцией `safeDiagnostics`. В JS доступны только безопасные DTO: проверенный email, planEnabled, модели, текст ответа, статусы и безопасные ошибки. `getSnapshot` возвращает и накопленный текст, чтобы потерянное событие не означало потерю ответа.
 
 Подписываться до старта операции. Snapshot и события содержат operation ID и монотонную revision; React state setter игнорирует устаревшие snapshots; текст передаётся целиком, а не повторно добавляемыми delta. Снятие подписки освобождает JS listener. Пересоздание React context/Fast Refresh не удаляет native auth session: новый UI переподписывается и сверяется с snapshot. Pending OAuth принадлежит Application, не ReactActivity, hook или экземпляру TurboModule. Если процесс погиб, действует обычный новый вход. Проверять эту границу при Reload отдельно от force-stop.
 
