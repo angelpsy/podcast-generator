@@ -5,6 +5,7 @@ import {TurboModuleRegistry} from 'react-native';
 export interface Spec extends TurboModule {
   getSnapshot(): Promise<string>;
   signIn(): Promise<void>;
+  refreshSession(): Promise<void>;
   cancel(): void;
   listModels(): Promise<void>;
   sendPrompt(model: string, text: string): Promise<void>;

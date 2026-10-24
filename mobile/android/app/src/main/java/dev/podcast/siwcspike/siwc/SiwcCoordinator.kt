@@ -316,6 +316,14 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         throw SafeFailure("authorization_timeout")
     }
 
+    /** Explicit refresh for the local SIWC test screen, using the normal session flow. */
+    fun refreshSession(done: (String?) -> Unit) = run("Refreshing", done) {
+        if (!connected(account())) throw SafeFailure("sign_in_required")
+        refresh()
+        update(if (planEnabled(account())) "Ready" else "SignedInWithoutPlan")
+        Log.i("SiwcSpike", "Refresh: verified and saved")
+    }
+
     private fun refresh() {
         RefreshFlow(
             read = ::account,

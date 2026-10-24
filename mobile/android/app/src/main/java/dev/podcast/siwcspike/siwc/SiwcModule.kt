@@ -32,6 +32,7 @@ class SiwcModule(context: ReactApplicationContext) : NativeSiwcSpec(context), Li
         if (error == null) promise.resolve(snapshot) else promise.reject(error, error)
     }
     override fun signIn(promise: Promise) = coordinator.signIn(completion(promise))
+    override fun refreshSession(promise: Promise) = coordinator.refreshSession(completion(promise))
     override fun cancel() = coordinator.cancel()
     override fun listModels(promise: Promise) = coordinator.listModels(completion(promise))
     override fun sendPrompt(model: String, text: String, promise: Promise) = coordinator.sendPrompt(model, text, completion(promise))

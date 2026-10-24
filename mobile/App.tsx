@@ -23,6 +23,7 @@ const stages: Record<string, string> = {
   SignedInWithoutPlan: 'Вход выполнен, подписка не разрешена',
   Ready: 'Подключено',
   LoadingModels: 'Загрузка моделей',
+  Refreshing: 'Обновление сессии',
   Streaming: 'Получение ответа',
   Completed: 'Запрос успешно завершён',
   Incomplete: 'Ответ не завершён',
@@ -101,6 +102,8 @@ function SiwcScreen() {
           <Button title="Continue with ChatGPT" disabled={snapshot.busy}
             onPress={() => act(() => NativeSiwc.signIn())} />
           <Text style={styles.hint}>Вход откроется в браузере телефона. После входа вернитесь в приложение.</Text>
+          <Button title="Обновить сессию" disabled={snapshot.busy || !snapshot.signedIn}
+            onPress={() => act(() => NativeSiwc.refreshSession())} />
           {snapshot.busy && <Button title="Отменить" onPress={() => NativeSiwc.cancel()} />}
         </View>
         <View style={styles.card}>
