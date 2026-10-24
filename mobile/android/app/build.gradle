@@ -82,9 +82,12 @@ android {
         applicationId "dev.podcast.siwcspike"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 3
+        versionName "1.2"
+        testInstrumentationRunner "dev.podcast.siwcspike.podcast.PodcastDeviceChecks"
     }
+    // Separate test APK exercises the installed release; no test hooks in the application.
+    testBuildType "release"
     buildTypes {
         debug {
             signingConfig signingConfigs.debug
@@ -100,6 +103,8 @@ android {
 }
 
 dependencies {
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-transformer:1.11.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.nimbusds:nimbus-jose-jwt:10.10")
     testImplementation("junit:junit:4.13.2")
@@ -114,3 +119,13 @@ dependencies {
         implementation jscFlavor
     }
 }
+
+tasks.register("verifyTtsAssets") {
+    doLast {
+        if (!file("src/main/assets/tts/supertonic3/manifest.json").exists() ||
+            !file("src/main/jniLibs/arm64-v8a/libsherpa-onnx-jni.so").exists()) {
+            throw new GradleException("Run python3 tools/prepare-tts-assets.py from the repository root first")
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn("verifyTtsAssets") }

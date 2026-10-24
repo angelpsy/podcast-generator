@@ -1,0 +1,32 @@
+{
+  "runtime": {
+    "file": "sherpa-onnx-v2.0.0-android.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v2.0.0/sherpa-onnx-v2.0.0-android.tar.bz2",
+    "sha256": "578650d0221255566bd7c88bd3a0deeb974b8562a332a6a875b35bd00b7e0f5d"
+  },
+  "model": {
+    "file": "sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/sherpa-onnx-supertonic-3-tts-int8-2026-05-11.tar.bz2",
+    "sha256": "82fa96f91c4ef8abaae3a14a3f4153facf88bed821d1f7331cec2700f432c427"
+  },
+  "binding": {
+    "file": "Tts.kt",
+    "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.0/sherpa-onnx/kotlin-api/Tts.kt",
+    "sha256": "291d30c045ae1cb88a87cce8d6794189e5e63f6ecefd012259694932a5594f38"
+  },
+  "sherpa_license": {
+    "file": "SHERPA-LICENSE",
+    "url": "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/v2.0.0/LICENSE",
+    "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "model_license": {
+    "file": "SUPERTONIC-MODEL-LICENSE",
+    "url": "https://huggingface.co/supertone-oss-archive/supertonic-3/resolve/aafc6e32416a594460b32413efc49d7fe4ce6d46/LICENSE",
+    "sha256": "0d944a9110fed9a9602d60e0423a272903e7bd21ab060490774efc77c2275e9f"
+  },
+  "onnxruntime_license": {
+    "file": "ONNXRUNTIME-LICENSE",
+    "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.24.1/LICENSE",
+    "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+  }
+}

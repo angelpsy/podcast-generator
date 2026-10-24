@@ -14,6 +14,8 @@ import {
 import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
 import NativeSiwc from './specs/NativeSiwc';
 import {initialSnapshot, parseSnapshot, safeDiagnostics, type Snapshot} from './src/state';
+import PodcastScreen from './src/PodcastScreen';
+import {siwcErrors as errors} from './src/siwcErrors';
 
 const stages: Record<string, string> = {
   SignedOut: 'Вход не выполнен',
@@ -32,27 +34,7 @@ const stages: Record<string, string> = {
   Failed: 'Операция не выполнена',
 };
 
-const errors: Record<string, string> = {
-  consent_denied: 'Разрешение отклонено в браузере.',
-  authorization_timeout: 'Время входа истекло. Начните вход заново.',
-  app_return_timeout: 'Время возврата в приложение истекло. Начните вход заново.',
-  plan_not_enabled: 'Вход выполнен, но разрешения использовать подписку нет.',
-  subscription_sharing_user_not_eligible: 'Использование подписки недоступно выбранному аккаунту или workspace.',
-  subscription_sharing_usage_limit_exceeded: 'Достигнут лимит. Проверьте ChatGPT → Settings → Usage.',
-  network_error: 'Не удалось подключиться. Проверьте интернет телефона.',
-  network_timeout: 'Время ожидания сети истекло.',
-  stream_interrupted: 'Соединение прервалось до подтверждения завершения ответа.',
-  invalid_grant: 'Сессия недействительна. Войдите заново.',
-  invalid_refresh_token: 'Сессия недействительна. Войдите заново.',
-  token_expired: 'Сессия истекла. Войдите заново.',
-  refresh_token_expired: 'Сессия истекла. Войдите заново.',
-  refresh_token_invalidated: 'Доступ отозван. Войдите заново.',
-  refresh_token_reused: 'Сессия недействительна. Войдите заново.',
-  sign_in_required: 'Нужно войти через ChatGPT.',
-  account_mismatch: 'Выбран другой аккаунт. Используйте аккаунт текущей регистрации.',
-  storage_unavailable: 'Не удалось прочитать защищённое хранилище приложения.',
-  revocation_unconfirmed: 'Локальный выход выполнен. Удалённый отзыв не подтверждён; отключите приложение в настройках ChatGPT.',
-};
+
 
 function SiwcScreen() {
   const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
@@ -139,10 +121,22 @@ function SiwcScreen() {
 }
 
 export default function App() {
-  return <SafeAreaProvider><SiwcScreen /></SafeAreaProvider>;
+  const [showSiwc, setShowSiwc] = useState(false);
+  const [podcastBusy, setPodcastBusy] = useState(false);
+  return <SafeAreaProvider>
+    <View style={showSiwc ? styles.hidden : styles.screen}>
+      <PodcastScreen onBusyChange={setPodcastBusy} />
+    </View>
+    {showSiwc && <SiwcScreen />}
+    <SafeAreaView edges={['bottom']}>
+      <Button disabled={podcastBusy} title={showSiwc ? 'Вернуться к подкасту' : 'Настройки SIWC'} onPress={() => setShowSiwc(!showSiwc)} />
+    </SafeAreaView>
+  </SafeAreaProvider>;
 }
 
 const styles = StyleSheet.create({
+  screen: {flex: 1},
+  hidden: {display: 'none'},
   safe: {flex: 1, backgroundColor: '#f3f5f7'},
   content: {padding: 20, gap: 16, paddingBottom: 40},
   eyebrow: {fontSize: 11, letterSpacing: 2, color: '#546475', fontWeight: '700'},

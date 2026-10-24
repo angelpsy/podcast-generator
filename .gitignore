@@ -13,3 +13,5 @@ npm-debug.log*
 **/.local/
 coverage/
 *.hprof
+mobile/android/app/src/main/assets/tts/supertonic3/
+mobile/android/app/src/main/jniLibs/arm64-v8a/

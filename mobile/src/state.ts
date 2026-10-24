@@ -27,7 +27,7 @@ export function parseSnapshot(raw: string): Snapshot {
 
 export function safeDiagnostics(snapshot: Snapshot, android: string): string {
   return JSON.stringify({
-    app: 'Podcast Generator SIWC Spike', version: '1.0', android,
+    app: 'Podcast Generator SIWC Spike', version: '1.2', android,
     stage: snapshot.stage, operationId: snapshot.operationId,
     model: snapshot.model ?? '', error: snapshot.error,
     httpStatus: snapshot.httpStatus, requestId: snapshot.requestId,

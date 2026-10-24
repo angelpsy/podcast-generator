@@ -24,6 +24,7 @@ import java.security.MessageDigest
 import java.security.SecureRandom
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -40,6 +41,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     private val executor = Executors.newSingleThreadExecutor()
     private val main = Handler(Looper.getMainLooper())
     private val busy = AtomicBoolean(false)
+    private val requestLock = Any()
     private val foregroundGate = ForegroundGate()
     private val cancelled = AtomicBoolean(false)
     private val listeners = CopyOnWriteArraySet<(String) -> Unit>()
@@ -49,6 +51,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     @Volatile private var server: ServerSocket? = null
     @Volatile private var callbackSocket: java.net.Socket? = null
     @Volatile private var call: Call? = null
+    @Volatile private var externalCancellation: AtomicBoolean? = null
     private var discovery: JSONObject? = null
     private var revision = 0L
     private var operationId = ""
@@ -100,9 +103,10 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         }
     }
 
-    private fun run(stage: String, done: (String?) -> Unit, work: () -> Unit) {
+    private fun run(stage: String, done: (String?) -> Unit, cancellation: AtomicBoolean? = null, work: () -> Unit) {
         if (!busy.compareAndSet(false, true)) { done("operation_busy"); return }
         cancelled.set(false)
+        synchronized(requestLock) { externalCancellation = cancellation }
         executor.execute {
             operationId = UUID.randomUUID().toString()
             try {
@@ -111,7 +115,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
                     .put("responseContentType", "").put("responseFormat", "") }
                 work()
             } catch (error: Exception) {
-                val safe = if (cancelled.get()) "cancelled" else when (error) {
+                val safe = if (cancelled.get() || externalCancellation?.get() == true) "cancelled" else when (error) {
                     is SafeFailure -> error.safeCode
                     is java.io.InterruptedIOException -> "network_timeout"
                     is java.io.IOException -> "network_error"
@@ -122,7 +126,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
             } finally {
                 server?.runCatching { close() }; server = null
                 callbackSocket?.runCatching { close() }; callbackSocket = null
-                call = null
+                synchronized(requestLock) { call = null; externalCancellation = null }
                 busy.set(false)
                 update()
                 done(null) // Expected protocol errors are represented in the safe snapshot.
@@ -137,12 +141,20 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         callbackSocket?.runCatching { close() }
         call?.cancel()
     }
-    private fun checkCancelled() { if (cancelled.get()) throw SafeFailure("cancelled") }
+    private fun checkCancelled() {
+        if (cancelled.get() || externalCancellation?.get() == true) throw SafeFailure("cancelled")
+    }
+
+    /** Cancel only the podcast's request, never a concurrent login/diagnostic operation. */
+    fun cancelScript(signal: AtomicBoolean) {
+        signal.set(true)
+        synchronized(requestLock) { if (externalCancellation === signal) call?.cancel() }
+    }
 
     private fun execute(request: Request): Response {
         checkCancelled()
         val active = http.newCall(request)
-        call = active
+        synchronized(requestLock) { call = active }
         checkCancelled()
         val kind = if (request.url.toString() == discovery?.optString("revocation_endpoint")) "revocation" else when (request.url.encodedPath) {
             "/api/accounts/oauth/token" -> "oauth_token"
@@ -353,11 +365,42 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     }
 
     fun listModels(done: (String?) -> Unit) = run("LoadingModels", done) {
+        loadModels()
+        update("Ready")
+    }
+
+    private fun loadModels(): JSONArray {
         authorized { token -> Request.Builder().url("${Protocol.RESOURCE}/models").header("Authorization", "Bearer $token").build() }.use {
             if (!it.isSuccessful) safeHttpError(it)
             val models = Protocol.models(JSONObject(it.body?.string() ?: throw SafeFailure("empty_response")))
-            update("Ready") { state -> state.put("models", models) }
+            update { state -> state.put("models", models) }
+            return models
         }
+    }
+
+    /** Runs on the same serial session worker as refresh/logout. No bearer token crosses this API. */
+    fun generateScript(preferredModel: String, topic: String, instructions: String, maxCodePoints: Int,
+                       cancellation: AtomicBoolean): CompletableFuture<JSONObject> {
+        val future = CompletableFuture<JSONObject>()
+        var result: JSONObject? = null
+        run("Streaming", { error ->
+            val value = result
+            if (value != null) future.complete(value)
+            else future.completeExceptionally(SafeFailure(error ?: JSONObject(snapshot()).optString("error").ifEmpty { "response_failed" }))
+        }, cancellation) {
+            checkCancelled()
+            val models = loadModels()
+            val available = (0 until models.length()).map { models.getJSONObject(it).getString("slug") }
+            val model = preferredModel.takeIf { it in available } ?: available.firstOrNull() ?: throw SafeFailure("no_models")
+            checkCancelled()
+            update("Streaming") { it.put("answer", "").put("model", model) }
+            val text = streamResponse(model, topic, instructions, maxCodePoints)
+            checkCancelled()
+            result = JSONObject().put("script", text).put("textModel", model)
+                .put("requestId", JSONObject(snapshot()).optString("requestId"))
+            update("Completed")
+        }
+        return future
     }
 
     fun sendPrompt(model: String, text: String, done: (String?) -> Unit) = run("Streaming", done) {
@@ -366,9 +409,13 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         if ((0 until models.length()).none { models.getJSONObject(it).getString("slug") == model }) throw SafeFailure("select_model")
         if (text.isBlank() || text.length > 4000) throw SafeFailure("prompt_length")
         update { it.put("answer", "").put("model", model) }
-        val body = JSONObject().put("model", model).put("store", false).put("stream", true)
-            .put("input", JSONArray().put(JSONObject().put("role", "user").put("content", text)))
-            .toString().toRequestBody("application/json".toMediaType())
+        val answer = streamResponse(model, text, null, 100_000) { partial -> update { it.put("answer", partial) } }
+        update("Completed") { it.put("answer", answer) }
+    }
+
+    private fun streamResponse(model: String, text: String, instructions: String?, maxCodePoints: Int,
+                               onDelta: (String) -> Unit = {}): String {
+        val body = ResponseText.request(model, text, instructions).toString().toRequestBody("application/json".toMediaType())
         authorized { token -> Request.Builder().url("${Protocol.RESOURCE}/responses")
             .header("Authorization", "Bearer $token").header("Accept", "text/event-stream").post(body).build() }.use { response ->
             if (!response.isSuccessful) safeHttpError(response)
@@ -386,30 +433,10 @@ internal class SiwcCoordinator private constructor(private val context: Context)
             update { it.put("httpStatus", response.code).put("responseContentType", contentType).put("responseFormat", format)
                 .put("requestId", response.header("x-request-id")?.takeIf { id -> id.matches(Regex("[A-Za-z0-9_-]{1,128}")) } ?: "") }
             if (!Protocol.isEventStream(response.header("Content-Type"), prefix)) throw SafeFailure("expected_event_stream")
-            var terminal = false
-            var outcome = ""
-            val answer = StringBuilder()
             val reader = response.body?.charStream()?.buffered() ?: throw SafeFailure("empty_response")
-            Protocol.readSse(reader) { event ->
-                checkCancelled()
-                if (!terminal) when (event.optString("type")) {
-                    "response.output_text.delta" -> {
-                        answer.append(event.getString("delta"))
-                        if (answer.length > 100_000) throw SafeFailure("answer_too_large")
-                        update { it.put("answer", answer.toString()) }
-                    }
-                    "response.completed" -> { terminal = true; outcome = "Completed" }
-                    "response.incomplete" -> { terminal = true; outcome = "Incomplete" }
-                    "response.failed", "error" -> {
-                        val error = event.optJSONObject("response")?.optJSONObject("error") ?: event.optJSONObject("error")
-                        val code = error?.optString("code") ?: event.optString("code")
-                        throw SafeFailure(if (code.matches(Regex("subscription_sharing_[a-z_]{1,80}"))) code else "response_failed")
-                    }
-                }
-                !terminal
+            return ResponseText.read(reader, maxCodePoints, ::checkCancelled, onDelta) { chars, parts ->
+                Log.i("SiwcSpike", "Completion: streamed_chars=$chars final_text_parts=$parts")
             }
-            if (!terminal) throw SafeFailure("stream_interrupted")
-            update(outcome)
         }
     }
 
