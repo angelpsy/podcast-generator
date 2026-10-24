@@ -12,6 +12,8 @@ export type Snapshot = {
   httpStatus: number;
   requestId: string;
   model?: string;
+  responseContentType?: string;
+  responseFormat?: string;
 };
 
 export const initialSnapshot: Snapshot = {
@@ -29,6 +31,8 @@ export function safeDiagnostics(snapshot: Snapshot, android: string): string {
     stage: snapshot.stage, operationId: snapshot.operationId,
     model: snapshot.model ?? '', error: snapshot.error,
     httpStatus: snapshot.httpStatus, requestId: snapshot.requestId,
+    responseContentType: snapshot.responseContentType ?? '',
+    responseFormat: snapshot.responseFormat ?? '',
     planEnabled: snapshot.planEnabled,
   }, null, 2);
 }

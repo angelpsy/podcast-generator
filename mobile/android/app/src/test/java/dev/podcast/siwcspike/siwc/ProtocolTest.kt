@@ -39,6 +39,15 @@ class ProtocolTest {
         assertEquals("code with space", Protocol.callback("/auth/callback?state=s&code=code+with+space", "s")?.get("code"))
     }
 
+    @Test fun acceptsMissingContentTypeOnlyForSseFraming() {
+        assertTrue(Protocol.isEventStream(null, "event: response.created\ndata: {}\n\n"))
+        assertTrue(Protocol.isEventStream("", ": keepalive\n\n"))
+        assertTrue(Protocol.isEventStream("Text/Event-Stream; charset=utf-8", "data: {}\n\n"))
+        assertFalse(Protocol.isEventStream(null, "{\"status\":\"completed\"}"))
+        assertFalse(Protocol.isEventStream(null, "<html>error</html>"))
+        assertFalse(Protocol.isEventStream("application/json", "data: {}\n\n"))
+    }
+
     @Test fun verifiesSignatureAudienceAndNonceBeforeIdentity() {
         val jwks = JWKSet(key.toPublicJWK()).toString()
         assertEquals("subject", Protocol.validateIdToken(token(), jwks, "client", "expected").getString("subject"))

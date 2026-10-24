@@ -4,7 +4,7 @@
 
 ## Текущий этап: минимальный Android-прототип SIWC
 
-Решено сначала проверить на Pixel вход через SIWC и получение короткого текстового ответа OpenAI с использованием только OAuth-доступа подписки. Стек приложения — **React Native + TypeScript**, с небольшим Kotlin TurboModule для SIWC, токенов и потокового ответа. Первый прототип реализован в `mobile/`; статус проверок и инструкция первого запуска — в [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md). Доступ подписки на Pixel пока не подтверждён.
+Решено сначала проверить на Pixel вход через SIWC и получение короткого текстового ответа OpenAI с использованием только OAuth-доступа подписки. Стек приложения — **React Native + TypeScript**, с небольшим Kotlin TurboModule для SIWC, токенов и потокового ответа. Первый прототип реализован в `mobile/`; статус проверок и инструкция первого запуска — в [IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md). 25 октября сквозной тест на Pixel прошёл: вход через SIWC и ответ «Связь работает.» с `response.completed`; [отчёт](docs/DEVICE_TEST_2026-10-25.md).
 
 - [Техническая спецификация](docs/ANDROID_SIWC_SPEC.md): экран, компоненты, протокол, хранение, ошибки и критерии приёмки.
 - [Разработка и тестирование на Pixel через MacBook](docs/ANDROID_DEVICE_TESTING.md): USB, Wi‑Fi, Android Studio, ADB и ежедневный цикл.

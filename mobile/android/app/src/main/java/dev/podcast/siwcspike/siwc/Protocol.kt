@@ -25,6 +25,15 @@ internal object Protocol {
 
     fun equal(a: String, b: String) = MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
 
+    /** Some SIWC responses omit Content-Type despite carrying normal SSE records. */
+    fun isEventStream(contentType: String?, prefix: String): Boolean {
+        val type = contentType?.substringBefore(';')?.trim()
+        if (type.equals("text/event-stream", ignoreCase = true)) return true
+        if (!type.isNullOrEmpty()) return false
+        val start = prefix.trimStart()
+        return start.startsWith("data:") || start.startsWith("event:") || start.startsWith(":")
+    }
+
     /** Invalid and unrelated requests leave the pending authorization alive. */
     fun callback(target: String, expectedState: String): Map<String, String>? = try {
         val uri = URI(target)

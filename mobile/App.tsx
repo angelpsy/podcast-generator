@@ -87,6 +87,9 @@ function SiwcScreen() {
           {snapshot.signedIn && !snapshot.email && <Text style={styles.text}>Аккаунт подключён</Text>}
           <Text style={styles.text}>Подписка: {snapshot.planEnabled ? 'разрешена' : 'не подключена'}</Text>
           {!!errorText && <Text accessibilityRole="alert" style={styles.error}>{errorText}</Text>}
+          {!!snapshot.error && !!snapshot.responseContentType && <Text style={styles.hint}>
+            HTTP {snapshot.httpStatus} · {snapshot.responseContentType} · {snapshot.responseFormat}
+          </Text>}
           {bridgeError && <Text accessibilityRole="alert" style={styles.error}>Не удалось выполнить команду. Попробуйте ещё раз.</Text>}
           <Button title="Continue with ChatGPT" disabled={snapshot.busy}
             onPress={() => act(() => NativeSiwc.signIn())} />

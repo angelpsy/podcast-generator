@@ -111,6 +111,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
                     is java.io.IOException -> "network_error"
                     else -> "invalid_response"
                 }
+                Log.i("SiwcSpike", "Failure: $safe")
                 update(if (safe == "cancelled") "Cancelled" else "Failed") { it.put("error", safe) }
             } finally {
                 server?.runCatching { close() }; server = null
@@ -337,10 +338,23 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         val body = JSONObject().put("model", model).put("store", false).put("stream", true)
             .put("input", JSONArray().put(JSONObject().put("role", "user").put("content", text)))
             .toString().toRequestBody("application/json".toMediaType())
-        authorized { token -> Request.Builder().url("${Protocol.RESOURCE}/responses").header("Authorization", "Bearer $token").post(body).build() }.use { response ->
+        authorized { token -> Request.Builder().url("${Protocol.RESOURCE}/responses")
+            .header("Authorization", "Bearer $token").header("Accept", "text/event-stream").post(body).build() }.use { response ->
             if (!response.isSuccessful) safeHttpError(response)
-            update { it.put("httpStatus", response.code).put("requestId", response.header("x-request-id")?.takeIf { id -> id.matches(Regex("[A-Za-z0-9_-]{1,128}")) } ?: "") }
-            if (response.header("Content-Type")?.startsWith("text/event-stream") != true) throw SafeFailure("expected_event_stream")
+            val mediaType = response.body?.contentType()
+            val contentType = mediaType?.let { "${it.type}/${it.subtype}" }
+                ?.takeIf { it.length <= 96 && it.matches(Regex("[a-z0-9.+-]+/[a-z0-9.+-]+")) } ?: "unknown"
+            val prefix = response.peekBody(512).string().trimStart()
+            val format = when {
+                prefix.startsWith("data:") || prefix.startsWith("event:") || prefix.startsWith(":") -> "sse"
+                prefix.startsWith("{") -> "json"
+                prefix.startsWith("<") -> "html"
+                else -> "other"
+            }
+            Log.i("SiwcSpike", "Response HTTP ${response.code}; content_type=$contentType; header_present=${response.header("Content-Type") != null}; format=$format")
+            update { it.put("httpStatus", response.code).put("responseContentType", contentType).put("responseFormat", format)
+                .put("requestId", response.header("x-request-id")?.takeIf { id -> id.matches(Regex("[A-Za-z0-9_-]{1,128}")) } ?: "") }
+            if (!Protocol.isEventStream(response.header("Content-Type"), prefix)) throw SafeFailure("expected_event_stream")
             var terminal = false
             var outcome = ""
             val answer = StringBuilder()
