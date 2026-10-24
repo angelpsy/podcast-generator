@@ -1,6 +1,6 @@
 # React Native Android SIWC Spike — техническая спецификация
 
-Дата: 24 октября 2026 года. Статус: проектирование; приложение ещё не реализовано.
+Дата: 24 октября 2026 года. Статус: первый прототип реализован; фактические проверки отражены в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## Цель и границы
 
@@ -13,7 +13,7 @@
 ## Платформа и зависимости
 
 - **React Native 0.86.3 + React 19.2.3 + TypeScript 5.9.3**, Community CLI 20.1.0, npm и `package-lock.json`. Один экран без навигационного фреймворка; New Architecture и Hermes из шаблона. Expo Go не используем: нужен собственный Android-модуль с loopback listener. Expo development build возможен технически, но в эту версию не входит.
-- Будущий проект находится в `mobile/`: `App.tsx`, `src/`, `specs/NativeSiwc.ts`, `android/`. Сейчас он не создаётся. Android Studio открывает `mobile/android`, Metro запускается из `mobile`.
+- Проект находится в `mobile/`: `App.tsx`, `src/`, `specs/NativeSiwc.ts`, `android/`. Код первого прототипа уже добавлен. Android Studio открывает `mobile/android`, Metro запускается из `mobile`.
 - Application ID / namespace: `dev.podcast.siwcspike`; launcher: `.MainActivity`; название: `Podcast Generator SIWC Spike`. `MainActivity` — ReactActivity, а не отдельный Kotlin-экран.
 - `minSdk=31` для этого эксперимента; `compileSdk=36`, `targetSdk=36`, Build Tools 36.0.0, NDK 27.1.12297006, CMake 3.22.1. Сохраняем базу RN-шаблона, повышая только его minSdk с 24 до 31. На Pixel записать фактическую версию Android.
 - Node.js 24.16.0 из существующего nvm, npm 11.13.0, JDK 17. Wrapper 9.3.1, AGP 8.12.0, Kotlin 2.1.20 — база RN 0.86, не прежняя самостоятельная Kotlin-конфигурация. При создании проекта сверить опубликованный шаблон 0.86.3 и RNGP, записать точные версии в lockfiles; не смешивать с AGP 8.13.2 / Gradle 8.13 из предыдущего этапа.
@@ -69,7 +69,7 @@
 
 ### Контракт TurboModule
 
-Методы: `getSnapshot()`, `signIn()`, `cancelSignIn()`, `listModels()`, `sendPrompt(modelSlug, text)`, `cancelRequest()`, `signOut()`, `getSafeDiagnostics()`. Async-операции возвращают Promise; для прогресса и delta — Codegen EventEmitter. В JS доступны только безопасные DTO: проверенный email, planEnabled, модели, текст ответа, статусы и безопасные ошибки. `getSnapshot` возвращает и накопленный текст, чтобы потерянное событие не означало потерю ответа.
+Методы: `getSnapshot()`, `signIn()`, `cancel()`, `listModels()`, `sendPrompt(modelSlug, text)`, `signOut()`. Async-операции возвращают Promise; для прогресса и delta — Codegen EventEmitter. В v0 события и snapshots передаются JSON-строками (`EventEmitter<string>`); диагностика собирается JS-функцией `safeDiagnostics`. В JS доступны только безопасные DTO: проверенный email, planEnabled, модели, текст ответа, статусы и безопасные ошибки. `getSnapshot` возвращает и накопленный текст, чтобы потерянное событие не означало потерю ответа.
 
 Подписываться до старта операции. Snapshot и события содержат operation ID и монотонную revision; reducer игнорирует устаревшие события и повторные delta. Снятие подписки освобождает JS listener. Пересоздание React context/Fast Refresh не удаляет native auth session: новый UI переподписывается и сверяется с snapshot. Pending OAuth принадлежит Application, не ReactActivity, hook или экземпляру TurboModule. Если процесс погиб, действует обычный новый вход. Проверять эту границу при Reload отдельно от force-stop.
 
@@ -161,4 +161,4 @@ Connect timeout 15 сек, чтение/простой потока 60 сек, �
 4. Проверить хранение, повторный запуск, refresh и выход.
 5. Пройти приёмку из этой спецификации и заполнить отчёт.
 
-Сейчас выполняется только спецификация и настройка инструментов; APK и реализация этих компонентов в текущую поставку не входят.
+Порядок выше использован для первого прототипа. Точные результаты сборки, отличия v0 и оставшаяся приёмка — в [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).

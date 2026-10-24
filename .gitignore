@@ -8,3 +8,8 @@ local.properties
 node_modules/
 .metro-health-check*
 npm-debug.log*
+**/.cxx/
+**/.externalNativeBuild/
+**/.local/
+coverage/
+*.hprof

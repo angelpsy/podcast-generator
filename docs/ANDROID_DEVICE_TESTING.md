@@ -2,7 +2,7 @@
 
 Дата: 24 октября 2026 года. Проект: `/Users/first/Documents/projects/pet/podcast-generator`.
 
-Сейчас подготовлены спецификация и инструменты. React Native-проект появится на следующем этапе в `mobile/`, Android-часть и `gradlew` — в `mobile/android/`. Команды сборки и запуска ниже — инструкция для этого этапа, а не сообщение о уже созданном приложении.
+React Native-прототип находится в `mobile/`, Android-часть и `gradlew` — в `mobile/android/`. Статус фактической сборки и проверок: [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md).
 
 ## 1. Инструменты и настройка IDE
 
@@ -77,7 +77,7 @@ adb shell getprop ro.build.version.sdk
 
 ## 3. Первый запуск React Native по USB
 
-После реализации `mobile/`, с одним подключённым Pixel:
+С одним подключённым Pixel:
 
 1. Терминал 1: запустить Metro из корня JS-проекта:
 
@@ -122,7 +122,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -W -n dev.podcast.siwcspike/.MainActivity
 ```
 
-Эти команды выполняются после появления кода и тестов; сейчас `mobile/` ещё нет. Устанавливать APK только после успешной сборки. При нескольких подключениях выбрать `ANDROID_SERIAL`; команды Gradle + `adb install` удобнее автоматического выбора устройства CLI.
+Код и тесты уже находятся в `mobile/`. Устанавливать APK только после успешной сборки. При нескольких подключениях выбрать `ANDROID_SERIAL`; команды Gradle + `adb install` удобнее автоматического выбора устройства CLI.
 
 Повседневно сохранять данные приложения. Обновление с тем же application ID и ключом сохраняет сессию; очистка/переустановка с удалением данных создаёт новую регистрацию. В ReactNative UI Fast Refresh и Reload должны переподключаться к native snapshot, не создавать новый OAuth автоматически.
 
@@ -145,7 +145,7 @@ adb shell am start -W -n dev.podcast.siwcspike/.MainActivity
 
 ### Сборка для теста без Metro/Mac
 
-При реализации настроить локальную release-сборку с embedded JS bundle, `debuggable=false` и подписью тем же локальным debug-ключом (не для публикации). RNGP должен выполнять bundle task для release, а не включать этот вариант в `debuggableVariants`. После этого:
+Release-сборка уже настроена с embedded JS bundle, `debuggable=false` и подписью тем же стандартным локальным debug-ключом машины (не для публикации). RNGP должен выполнять bundle task для release, а не включать этот вариант в `debuggableVariants`. После этого:
 
 ```sh
 cd /Users/first/Documents/projects/pet/podcast-generator/mobile/android
@@ -154,7 +154,7 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 adb shell am start -W -n dev.podcast.siwcspike/.MainActivity
 ```
 
-Остановить Metro, отключить кабель/ADB и оставить интернет телефона. Проверить новый запуск и запрос. Если подпись отличается, обновление поверх debug не получится; не удалять данные вслепую. Релизные настройки и подпись должны быть подготовлены в проекте до выполнения этих команд.
+Остановить Metro, отключить кабель/ADB и оставить интернет телефона. Проверить новый запуск и запрос. Если подпись отличается, обновление поверх debug не получится; не удалять данные вслепую. Стандартный debug-ключ находится вне репозитория, в пользовательском Android-каталоге.
 
 ## 5. Wi‑Fi для ежедневной разработки
 
