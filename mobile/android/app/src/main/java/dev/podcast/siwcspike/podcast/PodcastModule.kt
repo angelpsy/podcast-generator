@@ -36,10 +36,18 @@ class PodcastModule(context: ReactApplicationContext) : NativePodcastSpec(contex
     }
     override fun onHostDestroy() = coordinator.setForeground(false)
     override fun getSnapshot(promise: Promise) = coordinator.snapshot { promise.resolve(it) }
+    override fun previewGeneration(request: String, promise: Promise) = coordinator.previewGeneration(request) { value, error -> if (error == null) promise.resolve(value) else promise.reject(error, "Не удалось проверить очередь") }
+    override fun enqueueGeneration(request: String, promise: Promise) = coordinator.enqueueGeneration(request, "ui") { value, error -> if (error == null) promise.resolve(value) else promise.reject(error, "Не удалось сохранить очередь") }
+    override fun resumeQueue(id: String) = coordinator.resumeQueue(id, "ui")
+    override fun cancelTask(id: String) = coordinator.cancelTask(id, "ui")
     override fun create(topic: String, model: String) = coordinator.create(topic, model)
     override fun runRussianSample() = coordinator.runSample()
     override fun retryAudio() = coordinator.retry()
-    override fun cancel() = coordinator.cancel()
+    override fun selectEpisode(id: String) = coordinator.select(id)
+    override fun deleteEpisode(id: String) = coordinator.delete(id)
+    override fun searchLibrary(query: String) = coordinator.search(query)
+    override fun recoverLibrary() = coordinator.recoverLibrary("ui")
+    override fun cancel() = coordinator.cancel("ui")
     override fun play() = coordinator.play()
     override fun pause() = coordinator.pause()
     override fun restartPlayback() = coordinator.restart()

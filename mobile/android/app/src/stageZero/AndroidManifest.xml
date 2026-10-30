@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <application>
+        <activity android:name="dev.podcast.siwcspike.podcast.StageZeroNavigationActivity"
+            android:exported="true" android:permission="android.permission.DUMP"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode" />
+        <activity android:name="dev.podcast.siwcspike.podcast.StageZeroPlaybackActivity"
+            android:exported="true" android:permission="android.permission.DUMP" />
+        <!-- Shell-only controls exist only in this experimental build variant. -->
+        <service android:name="dev.podcast.siwcspike.podcast.StageZeroPlaybackService"
+            android:exported="true" android:permission="android.permission.DUMP"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter><action android:name="androidx.media3.session.MediaSessionService" /></intent-filter>
+        </service>
+    </application>
+</manifest>

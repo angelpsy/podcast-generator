@@ -24,6 +24,20 @@ class ResponseTextTest {
         assertEquals("user", body.getJSONArray("input").getJSONObject(0).getString("role"))
     }
 
+    @Test fun structuredFormatIsNestedAndIndependentFromCallerMutation() {
+        val schema = JSONObject().put("type", "object").put("additionalProperties", false)
+        val format = JSONObject().put("type", "json_schema").put("name", "outline")
+            .put("strict", true).put("schema", schema)
+        val body = ResponseText.request("account-model", "Тема", "Инструкция", format)
+        schema.put("type", "string")
+        val sent = body.getJSONObject("text").getJSONObject("format")
+        assertEquals("json_schema", sent.getString("type"))
+        assertTrue(sent.getBoolean("strict"))
+        assertEquals("object", sent.getJSONObject("schema").getString("type"))
+        assertFalse(body.getBoolean("store")); assertTrue(body.getBoolean("stream"))
+        assertFalse(body.has("response_format"))
+    }
+
     @Test fun completionRequiredAndTerminalTextIsNotDuplicated() {
         val terminal = event("response.completed").put("response", JSONObject().put("status", "completed")
             .put("output", JSONArray().put(JSONObject().put("type", "message").put("content", JSONArray()

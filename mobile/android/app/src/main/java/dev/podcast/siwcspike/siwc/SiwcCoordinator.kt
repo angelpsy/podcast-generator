@@ -151,9 +151,12 @@ internal class SiwcCoordinator private constructor(private val context: Context)
         synchronized(requestLock) { if (externalCancellation === signal) call?.cancel() }
     }
 
+    private data class ResponseBudget(val seconds: Long)
     private fun execute(request: Request): Response {
         checkCancelled()
-        val active = http.newCall(request)
+        val budget = request.tag(ResponseBudget::class.java)
+        val client = if (budget == null) http else http.newBuilder().callTimeout(budget.seconds, TimeUnit.SECONDS).build()
+        val active = client.newCall(request)
         synchronized(requestLock) { call = active }
         checkCancelled()
         val kind = if (request.url.toString() == discovery?.optString("revocation_endpoint")) "revocation" else when (request.url.encodedPath) {
@@ -380,7 +383,7 @@ internal class SiwcCoordinator private constructor(private val context: Context)
 
     /** Runs on the same serial session worker as refresh/logout. No bearer token crosses this API. */
     fun generateScript(preferredModel: String, topic: String, instructions: String, maxCodePoints: Int,
-                       cancellation: AtomicBoolean): CompletableFuture<JSONObject> {
+                       cancellation: AtomicBoolean, responseFormat: JSONObject? = null, requirePreferredModel: Boolean = false, responseTimeoutSeconds: Long = 120): CompletableFuture<JSONObject> {
         val future = CompletableFuture<JSONObject>()
         var result: JSONObject? = null
         run("Streaming", { error ->
@@ -391,10 +394,11 @@ internal class SiwcCoordinator private constructor(private val context: Context)
             checkCancelled()
             val models = loadModels()
             val available = (0 until models.length()).map { models.getJSONObject(it).getString("slug") }
+            if (requirePreferredModel && preferredModel !in available) throw SafeFailure("select_model")
             val model = preferredModel.takeIf { it in available } ?: available.firstOrNull() ?: throw SafeFailure("no_models")
             checkCancelled()
             update("Streaming") { it.put("answer", "").put("model", model) }
-            val text = streamResponse(model, topic, instructions, maxCodePoints)
+            val text = streamResponse(model, topic, instructions, maxCodePoints, responseFormat, responseTimeoutSeconds)
             checkCancelled()
             result = JSONObject().put("script", text).put("textModel", model)
                 .put("requestId", JSONObject(snapshot()).optString("requestId"))
@@ -414,10 +418,11 @@ internal class SiwcCoordinator private constructor(private val context: Context)
     }
 
     private fun streamResponse(model: String, text: String, instructions: String?, maxCodePoints: Int,
+                               responseFormat: JSONObject? = null, responseTimeoutSeconds: Long = 120,
                                onDelta: (String) -> Unit = {}): String {
-        val body = ResponseText.request(model, text, instructions).toString().toRequestBody("application/json".toMediaType())
+        val body = ResponseText.request(model, text, instructions, responseFormat).toString().toRequestBody("application/json".toMediaType())
         authorized { token -> Request.Builder().url("${Protocol.RESOURCE}/responses")
-            .header("Authorization", "Bearer $token").header("Accept", "text/event-stream").post(body).build() }.use { response ->
+            .header("Authorization", "Bearer $token").header("Accept", "text/event-stream").tag(ResponseBudget::class.java, ResponseBudget(responseTimeoutSeconds.coerceIn(120, 240))).post(body).build() }.use { response ->
             if (!response.isSuccessful) safeHttpError(response)
             val mediaType = response.body?.contentType()
             val contentType = mediaType?.let { "${it.type}/${it.subtype}" }

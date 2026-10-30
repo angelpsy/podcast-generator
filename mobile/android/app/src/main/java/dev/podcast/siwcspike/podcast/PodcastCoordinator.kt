@@ -11,12 +11,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.exoplayer.ExoPlayer
 import dev.podcast.siwcspike.siwc.SafeFailure
 import dev.podcast.siwcspike.siwc.SiwcCoordinator
 import org.json.JSONObject
@@ -37,50 +31,140 @@ class PodcastCoordinator private constructor(private val context: Context) {
             instance ?: PodcastCoordinator(context.applicationContext).also { instance = it }
         }
     }
-    private class Job(val retry: Boolean, val topic: String, val model: String, val sample: Boolean) {
+    private class Job(val retry: Boolean, val topic: String, val model: String, val sample: Boolean, val task: GenerationTask? = null) {
         val cancelled = AtomicBoolean(false)
         var phase = "PreparingVoice"
         fun check() { if (cancelled.get()) throw CancellationException() }
     }
     private val main = Handler(Looper.getMainLooper())
     private val worker = Executors.newSingleThreadExecutor()
+    private val queueWorker = Executors.newSingleThreadExecutor()
     private val root = File(context.noBackupFilesDir, "podcast").apply { mkdirs() }
-    private val draft = File(root, "draft")
-    private val draftJournal = AtomicAudioJournal(File(draft, "meta.json"))
-    private val store = LatestAudioStore(AtomicAudioJournal(File(root, "current.json")), AndroidAudioMedia(context))
+    private val audit = QueueCommandAudit(File(root, "queue-audit.jsonl"), { Log.i("QueueAudit", it) })
+    private val store = PodcastLibrary(PodcastDatabases.get(context), root, AndroidAudioMedia(context))
+    private val queue = GenerationQueue(PodcastDatabases.get(context))
+    private var queueRunning = false
+    private var dispatching = false
+    private val draftJournal get() = store.draftJournal
+    private var searchQuery = ""
     private val tts = LocalTtsEngine(context)
     private val siwc = SiwcCoordinator.get(context)
     private val encoder = M4aEncoder(context)
     private val listeners = linkedSetOf<(String) -> Unit>()
     private var foreground = false
     private var activeJob: Job? = null
-    private var player: ExoPlayer? = null
-    private var playerUri = ""
     private var revision = 0L
     private val state = JSONObject().put("stage", "Loading").put("busy", true)
         .put("error", "").put("script", "").put("inputTopic", "").put("selectedModel", "").put("playback", "Stopped")
         .put("canRetry", false).put("positionMs", 0).put("durationMs", 0)
 
-    init {
-        worker.execute {
-            var error = ""
-            try { store.recover() } catch (_: Exception) { error = "storage_recovery_failed" }
-            val current = try { store.current() } catch (_: Exception) { null }
-            val pending = try { PodcastDraft.read(draftJournal) }
-                catch (_: Exception) { error = "storage_recovery_failed"; null }
-            val retry = pending != null && pending.getString("id") != current?.optString("id")
-            // Only a confirmed publication makes its private draft obsolete. A read failure must not delete it.
-            if (pending != null && !retry) draft.deleteRecursively()
+    init { worker.execute {
+        val command = audit.begin("recover", "startup")
+        audit.event(command, if (loadLibrary()) "applied" else "failed", counts = auditCounts())
+    } }
+    private fun loadLibrary(): Boolean {
+        try {
+            store.initialize()
+            queue.recover()
             val input = runCatching { AtomicAudioJournal(File(root, "input.json")).read() }.getOrDefault(JSONObject())
-            main.post {
-                state.put("busy", false).put("stage", if (retry) "DraftReady" else if (current != null) "Ready" else "Idle")
-                    .put("error", error).put("canRetry", retry).put("episode", current ?: JSONObject.NULL)
-                    .put("inputTopic", input.optString("topic")).put("selectedModel", input.optString("model"))
-                    .put("script", if (retry) pending?.optString("script").orEmpty() else "")
-                emit()
-            }
+            publishLibrary(input = input)
+            return true
+        } catch (_: Exception) {
+            main.post { state.put("busy", false).put("stage", "StorageError")
+                .put("error", "storage_recovery_failed").put("storageReady", false); emit() }
+            return false
         }
     }
+    private fun publishLibrary(error: String = "", input: JSONObject? = null) {
+        val current = store.current()
+        val pending = PodcastDraft.resumable(draftJournal, current?.optString("id"))
+        val rows = store.list(searchQuery)
+        val selectedId = store.selectedId
+        val queueState = queue.json()
+        main.post {
+            state.put("busy", false).put("storageReady", true)
+                .put("stage", if (pending != null) "DraftReady" else if (current != null) "Ready" else "Idle")
+                .put("error", error).put("canRetry", pending != null).put("episode", current ?: JSONObject.NULL)
+                .put("generationQueue", queueState).put("selectedId", selectedId).put("library", rows)
+                .put("script", pending?.optString("script").orEmpty())
+                .put("positionMs", 0).put("durationMs", current?.optLong("durationMs") ?: 0)
+            input?.let { state.put("inputTopic", it.optString("topic")).put("selectedModel", it.optString("model")) }
+            emit(); pump()
+        }
+    }
+    private fun auditCounts() = runCatching { queue.auditCounts() }.getOrNull()
+    private fun publishQueue() {
+        val rows = queue.json(); main.post { state.put("generationQueue", rows); emit() }
+    }
+    fun previewGeneration(raw: String, done: (String?, String?) -> Unit) { queueWorker.execute {
+        try { require(raw.length <= 16000); done(queue.preview(JSONObject(raw)).toString(), null) }
+        catch (e: TopicFailure) { done(null, e.code) } catch (e: SafeFailure) { done(null, e.safeCode) } catch (_: Exception) { done(null, "invalid_request") }
+    } }
+    fun enqueueGeneration(raw: String, source: String = "internal", done: (String?, String?) -> Unit) { queueWorker.execute {
+        val command = audit.begin("enqueue", source)
+        try { require(raw.length <= 16000); val result = queue.enqueue(JSONObject(raw)); publishQueue(); done(result.toString(), null)
+            audit.event(command, "applied", result.getInt("added"), auditCounts())
+            main.post { queueRunning = true; pump() } }
+        catch (e: TopicFailure) { audit.event(command, "failed"); done(null, e.code) } catch (e: SafeFailure) { audit.event(command, "failed"); done(null, e.safeCode) } catch (_: Exception) { audit.event(command, "failed"); done(null, "generation_storage_failed") }
+    } }
+    fun resumeQueue(id: String, source: String = "internal") { main.post {
+        val command = audit.begin("resume", source, id)
+        if (activeJob != null || dispatching || state.optBoolean("busy")) { audit.event(command, "rejected_busy"); return@post }
+        worker.execute { try { val affected = queue.resume(id); audit.event(command, "applied", affected, auditCounts()); publishQueue(); main.post { queueRunning = true; pump() } }
+            catch (_: Exception) { audit.event(command, "failed"); main.post { state.put("error", "generation_storage_failed"); emit() } } }
+    } }
+    fun cancelTask(id: String, source: String = "internal") { main.post {
+        val command = audit.begin("cancel", source, id)
+        if (activeJob?.task?.id == id) { audit.event(command, "paused", 1); cancelOnMain(source) }
+        else queueWorker.execute {
+            try {
+                val removed = queue.cancel(id)
+                if (!removed && queue.find(id)?.status == "RUNNING") main.post { if (activeJob?.task?.id == id) cancelOnMain(source) }
+                audit.event(command, "applied", if (removed) 1 else 0, auditCounts()); publishQueue()
+            } catch (_: Exception) { audit.event(command, "failed"); main.post { state.put("error", "generation_storage_failed"); emit() } }
+        }
+    } }
+    private fun pump() {
+        if (!queueRunning || dispatching || activeJob != null || state.optBoolean("busy") || !foreground) return
+        dispatching = true
+        worker.execute {
+            try { val next = queue.next(); main.post {
+                if (!queueRunning || !foreground || next == null) { dispatching = false; return@post }
+                start(next.title, next.model, queueTask = next)
+            } } catch (_: Exception) { main.post { dispatching = false; queueRunning = false; state.put("error", "generation_storage_failed"); emit() } }
+        }
+    }
+    fun recoverLibrary(source: String = "internal") { main.post {
+        val command = audit.begin("recover", source)
+        if (state.optBoolean("busy")) { audit.event(command, "rejected_busy"); return@post }
+        state.put("busy", true); emit()
+        worker.execute { audit.event(command, if (loadLibrary()) "applied" else "failed", counts = auditCounts()) }
+    } }
+    fun search(query: String) { main.post {
+        searchQuery = query.take(500)
+        worker.execute {
+            try { val rows = store.list(searchQuery); main.post { state.put("library", rows); emit() } }
+            catch (_: Exception) { main.post { state.put("error", "storage_recovery_failed"); emit() } }
+        }
+    } }
+    fun select(id: String) { libraryAction { store.select(id); publishLibrary() } }
+    fun delete(id: String) {
+        PlaybackClient.get(context).remove(id) { removed ->
+            if (removed) libraryAction { queue.cancel(id); store.delete(id); publishLibrary() }
+            else { state.put("error", "storage_operation_failed"); emit() }
+        }
+    }
+    private fun libraryAction(action: () -> Unit) { main.post {
+        if (state.optBoolean("busy")) return@post
+        state.put("busy", true).put("playback", "Stopped"); emit()
+        worker.execute {
+            try { action() } catch (_: Exception) {
+                try { publishLibrary("storage_operation_failed") } catch (_: Exception) {
+                    main.post { state.put("busy", false).put("error", "storage_recovery_failed"); emit() }
+                }
+            }
+        }
+    } }
     fun subscribe(listener: (String) -> Unit) { main.post { listeners.add(listener) } }
     fun unsubscribe(listener: (String) -> Unit) { main.post { listeners.remove(listener) } }
     fun snapshot(callback: (String) -> Unit) { main.post { callback(state.toString()) } }
@@ -91,10 +175,16 @@ class PodcastCoordinator private constructor(private val context: Context) {
     }
     fun setForeground(value: Boolean) { main.post {
         foreground = value
-        if (!value) { player?.pause(); cancelOnMain() }
+        if (!value) cancelOnMain("lifecycle")
     } }
-    fun cancel() { main.post { cancelOnMain() } }
-    private fun cancelOnMain() {
+    fun cancel(source: String = "internal") { main.post { cancelOnMain(source) } }
+    private fun cancelOnMain(source: String = "internal") {
+        val command = audit.begin("pause", source)
+        queueRunning = false
+        worker.execute {
+            try { val affected = queue.pause(); audit.event(command, "applied", affected, auditCounts()); publishQueue() }
+            catch (_: Exception) { audit.event(command, "failed"); main.post { state.put("error", "generation_storage_failed"); emit() } }
+        }
         activeJob?.let {
             it.cancelled.set(true)
             siwc.cancelScript(it.cancelled)
@@ -106,15 +196,19 @@ class PodcastCoordinator private constructor(private val context: Context) {
 
     fun runSample() = start("Проверка русской озвучки", "", sample = true)
     fun create(topic: String, model: String) = start(topic, model)
-    fun retry() = start("", "", retry = true)
+    fun retry() { main.post {
+        val id = store.selectedId
+        worker.execute { val task = queue.find(id); if (task == null) start("", "", retry = true) else resumeQueue(id, "library_retry") }
+    } }
 
-    private fun start(topic: String, model: String, retry: Boolean = false, sample: Boolean = false) { main.post {
-        if (state.optBoolean("busy")) return@post
+    private fun start(topic: String, model: String, retry: Boolean = false, sample: Boolean = false, queueTask: GenerationTask? = null) { main.post {
+        dispatching = false
+        if (queueTask != null && (!queueRunning || !foreground)) return@post
+        if (state.optBoolean("busy") || !state.optBoolean("storageReady")) return@post
         if (!foreground) { state.put("error", "app_not_foreground"); emit(); return@post }
         val cleanTopic = try { if (retry) "" else PodcastScript.topic(topic) }
             catch (e: SafeFailure) { state.put("error", e.safeCode); emit(); return@post }
-        player?.stop(); player?.clearMediaItems(); playerUri = ""
-        val job = Job(retry, cleanTopic, model, sample)
+        val job = Job(retry, cleanTopic, model, sample, queueTask)
         activeJob = job
         state.put("busy", true).put("error", "").put("stage", "PreparingVoice")
             .put("playback", "Stopped").put("positionMs", 0).put("canRetry", false)
@@ -125,6 +219,7 @@ class PodcastCoordinator private constructor(private val context: Context) {
 
     private fun progress(job: Job, phase: String, chunk: Int = 0, total: Int = 0) {
         job.phase = phase
+        job.task?.let { queue.phase(it.id, phase); publishQueue() }
         Log.i("PodcastSpike", JSONObject().put("stage", phase).put("chunk", chunk).toString())
         main.post {
             if (activeJob === job && !job.cancelled.get()) {
@@ -135,30 +230,46 @@ class PodcastCoordinator private constructor(private val context: Context) {
 
     private fun generate(job: Job) {
         var meta: JSONObject? = null
+        var jobDirectory: File? = null
         val started = SystemClock.elapsedRealtime()
         try {
             store.recover()
             job.check()
-            if (!job.retry) {
-                check(draft.deleteRecursively() || !draft.exists()) { "draft_cleanup_failed" }
-                check(draft.mkdirs()) { "draft_create_failed" }
-                val id = UUID.randomUUID().toString()
+            job.task?.let { task ->
+                if (!queue.running(task.id)) {
+                    main.post { if (activeJob === job) { activeJob = null; state.put("busy", false).put("stage", "Idle"); emit(); pump() } }
+                    return
+                }
+                audit.event(audit.begin("start", "runner", task.id), "started", 1, auditCounts())
+                if (store.hasRecord(task.id)) store.select(task.id); publishQueue()
+            }
+            val retry = job.retry || (job.task != null && store.hasDraft(job.task.id))
+            if (!retry) {
+                val id = job.task?.id ?: UUID.randomUUID().toString()
                 meta = JSONObject().put("schema", 2).put("id", id).put("name", "podcast-${System.currentTimeMillis()}-${id.take(8)}.m4a")
                     .put("language", "ru").put("voice", 0).put("runtime", "sherpa-onnx 2.0.0")
                     .put("model", "supertonic-3-int8-2026-05-11").put("numSteps", 8).put("numThreads", 2)
                     .put("topic", job.topic).put("preferredModel", job.model)
+                job.task?.let { task ->
+                    meta.put("languagePolicy", task.profile).put("language", LanguagePolicy.tts(task.profile))
+                        .put("contentSettings", JSONObject(task.settings)).put("generationInput", JSONObject(task.input))
+                        .put("sourceTopicId", task.topicId).put("sourceNodeId", task.nodeId).put("promptVersion", "episode-v1")
+                }
                 if (job.sample) meta.put("script", PodcastScript.normalize(RussianSample.text))
-                else AtomicAudioJournal(File(root, "input.json")).write(JSONObject().put("topic", job.topic).put("model", job.model))
-                draftJournal.write(meta)
+                else if (job.task == null || JSONObject(job.task.input).optString("scope") == "STANDALONE") AtomicAudioJournal(File(root, "input.json")).write(JSONObject().put("topic", job.topic).put("model", job.model))
+                store.begin(meta)
             } else {
                 meta = PodcastDraft.read(draftJournal) ?: throw SafeFailure("no_draft")
             }
+            val draft = store.draft
+            jobDirectory = draft
+            check(draft.mkdirs() || draft.isDirectory) { "draft_create_failed" }
             var details = requireNotNull(meta)
             val previous = store.current()
             if (previous?.optString("id") == details.getString("id")) {
                 finish(job, previous, store.cleanupPending()); return
             }
-            check(root.usableSpace > 32L * 1024 * 1024) { "not_enough_space" }
+            check(root.usableSpace > if (details.has("contentSettings")) EpisodeScript.requiredBytes("x".repeat(ContentSettings.parse(details.getJSONObject("contentSettings")).limits.third)) else 32L * 1024 * 1024) { "not_enough_space" }
             val codecFormat = MediaFormat.createAudioFormat("audio/mp4a-latm", 44100, 1)
             check(MediaCodecList(MediaCodecList.REGULAR_CODECS).findEncoderForFormat(codecFormat) != null) { "aac_unavailable" }
             val wav = File(draft, "speech.wav")
@@ -170,15 +281,17 @@ class PodcastCoordinator private constructor(private val context: Context) {
                     val cold = tts.prepare(job::check)
                     details.put("coldInit", cold).put("prepareMs", SystemClock.elapsedRealtime() - prepareStart)
                     draftJournal.write(details)
-                    details = PodcastScript.completedDraft(draftJournal) {
-                        job.check()
-                        progress(job, "GeneratingText")
+                    val structured = details.has("contentSettings")
+                    val generateText = {
+                        job.check(); progress(job, "GeneratingText")
                         val textStart = SystemClock.elapsedRealtime()
-                        val result = siwc.generateScript(details.optString("preferredModel"), details.getString("topic"),
-                            PodcastScript.INSTRUCTIONS, PodcastScript.MAX_TEXT, job.cancelled).get()
-                        job.check()
-                        result.put("textMs", SystemClock.elapsedRealtime() - textStart)
+                        val result = if (structured) siwc.generateScript(details.optString("preferredModel"), details.getJSONObject("generationInput").toString(),
+                            EpisodeScript.instructions(details.getString("languagePolicy")), EpisodeScript.RAW_LIMIT, job.cancelled,
+                            EpisodeScript.format(), requirePreferredModel = true, responseTimeoutSeconds = 240).get(300, TimeUnit.SECONDS)
+                        else siwc.generateScript(details.optString("preferredModel"), details.getString("topic"), PodcastScript.INSTRUCTIONS, PodcastScript.MAX_TEXT, job.cancelled).get()
+                        job.check(); result.put("textMs", SystemClock.elapsedRealtime() - textStart)
                     }
+                    details = if (structured) EpisodeScript.complete(draftJournal, generateText) else PodcastScript.completedDraft(draftJournal, generateText)
                     meta = details
                     job.check()
                     val script = details.getString("script")
@@ -188,10 +301,12 @@ class PodcastCoordinator private constructor(private val context: Context) {
                     } }
                     var maxPss = Debug.getPss()
                     val synthesisStart = SystemClock.elapsedRealtime()
-                    val audio = tts.synthesize(script, wav, job::check) { chunk, total ->
+                    val report: (Int, Int) -> Unit = { chunk, total ->
                         maxPss = maxOf(maxPss, Debug.getPss())
                         progress(job, "Synthesizing", chunk, total)
                     }
+                    val audio = if (details.has("contentSettings")) tts.synthesizeDurable(script, details.getString("language"), draft, wav, job::check, report)
+                        else tts.synthesize(script, wav, job::check, report)
                     audio.keys().forEach { details.put(it, audio.get(it)) }
                     details.put("synthesisMs", SystemClock.elapsedRealtime() - synthesisStart)
                         .put("observedPssKb", maxOf(maxPss, Debug.getPss()))
@@ -236,33 +351,52 @@ class PodcastCoordinator private constructor(private val context: Context) {
             val error = when {
                 job.cancelled.get() || e is CancellationException -> "cancelled"
                 cause is SafeFailure -> cause.safeCode
+                cause is TopicFailure -> "invalid_script_schema"
                 e is LinkageError -> "native_runtime_unavailable"
                 e is OutOfMemoryError -> "out_of_memory"
                 e.message == "not_enough_space" -> "not_enough_space"
                 e.message == "aac_unavailable" -> "aac_unavailable"
+                e.message == "checkpoint_mismatch" -> "checkpoint_mismatch"
+                e.message == "tts_timeout" -> "tts_timeout"
                 else -> "${job.phase.lowercase()}_failed"
             }
+            siwc.cancelScript(job.cancelled)
             val inspectionErrors = setOf("invalid_m4a_tracks", "invalid_audio_codec", "missing_aac_config", "not_aac_lc",
                 "invalid_audio_channels", "empty_m4a", "missing_audio_samples", "m4a_rename_failed")
             val detail = e.message?.takeIf { it in inspectionErrors }.orEmpty()
             Log.w("PodcastSpike", "failure=$error type=${e.javaClass.simpleName} detail=$detail")
-            File(draft, "speech.part").delete()
+            jobDirectory?.let { File(it, "speech.part").delete() }
+            if (job.task != null) {
+                val localError = error in setOf("script_markup", "script_language", "empty_script", "answer_too_large", "invalid_script_schema", "response_refused")
+                val pause = !localError
+                queue.stop(job.task.id, error, pause)
+                audit.event(audit.begin("stop", "runner", job.task.id), if (pause) "paused" else "failed", 1, auditCounts())
+                if (pause) {
+                    val command = audit.begin("pause", "runner")
+                    audit.event(command, "applied", queue.pause(), auditCounts()); main.post { queueRunning = false }
+                }
+                publishQueue()
+            }
+            val rows = runCatching { store.list(searchQuery) }.getOrDefault(org.json.JSONArray())
+            val failedDraft = jobDirectory
             main.post {
                 if (activeJob !== job) return@post
                 encoder.cancel()
-                File(draft, "audio.part.m4a").delete()
+                failedDraft?.let { File(it, "audio.part.m4a").delete() }
                 activeJob = null
                 state.put("stage", if (error == "cancelled") "Cancelled" else "Failed")
                     .put("busy", false).put("error", error).put("canRetry", savedDraft != null)
                     .put("script", savedDraft?.optString("script").orEmpty())
-                    .put("episode", current ?: JSONObject.NULL)
-                emit()
+                    .put("episode", current ?: JSONObject.NULL).put("library", rows)
+                emit(); pump()
             }
         }
     }
 
     private fun finish(job: Job, episode: JSONObject, cleanupPending: Boolean) {
-        draft.deleteRecursively()
+        job.task?.let { queue.complete(it.id); audit.event(audit.begin("complete", "runner", it.id), "completed", 1, auditCounts()); publishQueue() }
+        store.completeDraft()
+        val rows = store.list(searchQuery)
         val log = PodcastScript.diagnostics(episode)
         Log.i("PodcastSpike", "completed=$log cleanupPending=$cleanupPending")
         main.post {
@@ -271,59 +405,21 @@ class PodcastCoordinator private constructor(private val context: Context) {
             state.put("stage", "Ready").put("busy", false).put("canRetry", false)
                 .put("episode", episode).put("error", if (cleanupPending) "cleanup_pending" else "")
                 .put("script", "")
-                .put("durationMs", episode.optLong("durationMs"))
-            emit()
+                .put("durationMs", episode.optLong("durationMs")).put("library", rows)
+            emit(); pump()
         }
     }
 
-    private fun ensurePlayer(): ExoPlayer = player ?: ExoPlayer.Builder(context).build().also { p ->
-        p.setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA)
-            .setContentType(C.AUDIO_CONTENT_TYPE_SPEECH).build(), true)
-        p.setHandleAudioBecomingNoisy(true)
-        p.addListener(object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying: Boolean) {
-                state.put("playback", if (isPlaying) "Playing" else "Paused"); emit()
-                if (isPlaying) main.post(object : Runnable {
-                    override fun run() {
-                        state.put("positionMs", p.currentPosition)
-                        if (p.duration > 0) state.put("durationMs", p.duration)
-                        emit()
-                        if (p.isPlaying) main.postDelayed(this, 500)
-                    }
-                })
-            }
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_ENDED) {
-                    state.put("playback", "Ended").put("positionMs", p.currentPosition); emit()
-                }
-            }
-            override fun onPlayerError(error: PlaybackException) {
-                state.put("error", "playback_failed"); emit()
-            }
-        })
-        player = p
-    }
     fun play() { main.post {
-        if (!foreground || state.optBoolean("busy")) return@post
-        val uri = state.optJSONObject("episode")?.optString("uri").orEmpty()
-        if (uri.isEmpty()) return@post
-        try {
-            context.contentResolver.openFileDescriptor(Uri.parse(uri), "r")?.close() ?: error("missing_file")
-            val p = ensurePlayer()
-            val mediaChanged = playerUri != uri
-            if (mediaChanged) {
-                p.setMediaItem(MediaItem.fromUri(uri)); playerUri = uri
-            }
-            state.put("error", ""); playPodcast(p, mediaChanged)
-        } catch (_: Exception) { state.put("error", "file_unavailable"); emit() }
+        state.optJSONObject("episode")?.optString("id")?.let { PlaybackClient.get(context).playEpisode(it) }
     } }
-    fun pause() { main.post { player?.pause() } }
-    fun restart() { main.post { player?.seekTo(0); state.put("positionMs", 0); emit() } }
+    fun pause() = PlaybackClient.get(context).pause()
+    fun restart() = PlaybackClient.get(context).seek(0.0)
     fun openExternal() { main.post {
         if (state.optBoolean("busy")) return@post
         val uriString = state.optJSONObject("episode")?.optString("uri").orEmpty()
         if (uriString.isEmpty()) return@post
-        player?.pause()
+        PlaybackClient.get(context).pause()
         try {
             val uri = Uri.parse(uriString)
             context.contentResolver.openFileDescriptor(uri, "r")?.close() ?: error("missing_file")

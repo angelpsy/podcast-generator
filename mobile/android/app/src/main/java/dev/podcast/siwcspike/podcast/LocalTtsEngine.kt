@@ -58,10 +58,43 @@ class LocalTtsEngine(private val context: Context) {
     }
 
     fun synthesize(script: String, file: File, checkCancelled: () -> Unit, progress: (Int, Int) -> Unit): JSONObject {
-        val engine = checkNotNull(tts)
         val chunks = PodcastScript.chunks(PodcastScript.normalize(script))
+        return synthesizeChunks(chunks, "ru", file, 120_000, checkCancelled, progress)
+    }
+
+    fun synthesizeDurable(script: String, language: String, directory: File, file: File,
+                          checkCancelled: () -> Unit, progress: (Int, Int) -> Unit): JSONObject {
+        require(language in setOf("ru", "en"))
+        val engine = checkNotNull(tts); val rate = engine.sampleRate()
+        val chunks = PodcastScript.chunks(script); check(chunks.size in 1..160)
+        val cache = SpeechCheckpoint(directory, "$language|$script", rate)
+        val deadline = SystemClock.elapsedRealtime() + 1_200_000
+        var fragmentDeadline = Long.MAX_VALUE
+        fun checkpoint() { checkCancelled(); check(SystemClock.elapsedRealtime() < minOf(deadline, fragmentDeadline)) { "tts_timeout" } }
+        var reused = 0
+        chunks.forEachIndexed { index, text ->
+            checkpoint(); progress(index + 1, chunks.size)
+            if (cache.ready(index)) reused++ else {
+                fragmentDeadline = SystemClock.elapsedRealtime() + 120_000
+                val audio = engine.generateWithConfigAndCallback(text, GenerationConfig(sid = 0, speed = 1f, numSteps = 8, extra = mapOf("lang" to language)), SherpaAudioCallback(::checkpoint))
+                checkpoint(); check(audio.sampleRate == rate && audio.samples.isNotEmpty()) { "invalid_tts_audio" }
+                PcmWav(cache.partial(index), rate).use { wav -> wav.append(audio.samples); wav.finish() }
+                cache.commit(index); fragmentDeadline = Long.MAX_VALUE
+            }
+        }
+        val duration = cache.assemble(chunks.size, file, ::checkpoint)
+        return JSONObject().put("sampleRate", rate).put("pcmDurationMs", duration).put("wavBytes", file.length()).put("reusedChunks", reused).put("chunks", chunks.size)
+    }
+
+    /** Serial worker only. Caller validates its text policy before selecting RU/EN and a bounded budget. */
+    internal fun synthesizeChunks(chunks: List<String>, language: String, file: File, timeoutMs: Long,
+                                  checkCancelled: () -> Unit, progress: (Int, Int) -> Unit): JSONObject {
+        require(language in setOf("ru", "en"))
+        require(chunks.isNotEmpty() && chunks.size <= 160 && chunks.all { it.isNotBlank() && it.codePointCount(0, it.length) <= 400 })
+        require(timeoutMs in 1..1_200_000)
+        val engine = checkNotNull(tts)
         val rate = engine.sampleRate()
-        val deadline = SystemClock.elapsedRealtime() + 120_000
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
         fun checkpoint() {
             checkCancelled()
             check(SystemClock.elapsedRealtime() < deadline) { "tts_timeout" }
@@ -73,7 +106,7 @@ class LocalTtsEngine(private val context: Context) {
                 checkpoint()
                 progress(index + 1, chunks.size)
                 val audio = engine.generateWithConfigAndCallback(text,
-                    GenerationConfig(sid = 0, speed = 1f, numSteps = 8, extra = mapOf("lang" to "ru")),
+                    GenerationConfig(sid = 0, speed = 1f, numSteps = 8, extra = mapOf("lang" to language)),
                     SherpaAudioCallback(::checkpoint))
                 checkpoint()
                 check(audio.sampleRate == rate && audio.samples.isNotEmpty()) { "invalid_tts_audio" }

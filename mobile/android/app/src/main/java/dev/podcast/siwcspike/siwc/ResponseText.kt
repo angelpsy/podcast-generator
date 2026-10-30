@@ -6,10 +6,13 @@ import java.io.BufferedReader
 
 /** Shared Responses contract. Partial text is never a successful result. */
 internal object ResponseText {
-    fun request(model: String, input: String, instructions: String? = null): JSONObject =
+    fun request(model: String, input: String, instructions: String? = null, responseFormat: JSONObject? = null): JSONObject =
         JSONObject().put("model", model).put("store", false).put("stream", true)
             .put("input", JSONArray().put(JSONObject().put("role", "user").put("content", input)))
-            .also { if (instructions != null) it.put("instructions", instructions) }
+            .also {
+                if (instructions != null) it.put("instructions", instructions)
+                if (responseFormat != null) it.put("text", JSONObject().put("format", JSONObject(responseFormat.toString())))
+            }
 
     fun read(reader: BufferedReader, maxCodePoints: Int, checkCancelled: () -> Unit,
              onDelta: (String) -> Unit = {}, onTerminal: (Int, Int) -> Unit = { _, _ -> }): String {

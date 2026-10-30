@@ -25,6 +25,13 @@ class PcmWav(file: File, private val sampleRate: Int) : Closeable {
         output.write(bytes)
         frames += samples.size
     }
+    fun appendPcm(file: File, checkCancelled: () -> Unit) {
+        RandomAccessFile(file, "r").use { input ->
+            check(input.length() > 44 && (input.length() - 44) % 2 == 0L)
+            input.seek(44); val buffer = ByteArray(65536)
+            while (true) { checkCancelled(); val n = input.read(buffer); if (n < 0) break; check(n % 2 == 0); output.write(buffer, 0, n); frames += n / 2 }
+        }
+    }
     fun finish(): Long {
         require(frames > 0 && frames * 2 < Int.MAX_VALUE - 44)
         output.seek(0)

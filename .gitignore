@@ -12,6 +12,8 @@ npm-debug.log*
 **/.externalNativeBuild/
 **/.local/
 coverage/
+__pycache__/
+*.pyc
 *.hprof
 mobile/android/app/src/main/assets/tts/supertonic3/
 mobile/android/app/src/main/jniLibs/arm64-v8a/

@@ -1,156 +1,51 @@
-import React, {useEffect, useState} from 'react';
-import {
-  ActivityIndicator,
-  Button,
-  Platform,
-  Pressable,
-  ScrollView,
-  Share,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
-import {SafeAreaProvider, SafeAreaView} from 'react-native-safe-area-context';
-import NativeSiwc from './specs/NativeSiwc';
-import {initialSnapshot, parseSnapshot, safeDiagnostics, type Snapshot} from './src/state';
+import React from 'react';
+import {StyleSheet, View} from 'react-native';
+import {NavigationContainer, useNavigation} from '@react-navigation/native';
+import {createNativeStackNavigator, type NativeStackNavigationProp} from '@react-navigation/native-stack';
+import {BottomTabBar, createBottomTabNavigator, type BottomTabBarProps} from '@react-navigation/bottom-tabs';
+import {SafeAreaProvider} from 'react-native-safe-area-context';
+import TopicsNavigator from './src/TopicsScreen';
+import PlaylistsNavigator from './src/PlaylistsScreen';
 import PodcastScreen from './src/PodcastScreen';
-import {siwcErrors as errors} from './src/siwcErrors';
-
-const stages: Record<string, string> = {
-  SignedOut: 'Вход не выполнен',
-  Authorizing: 'Завершите вход в браузере и вернитесь сюда',
-  Validating: 'Проверка входа и разрешений',
-  AwaitingReturn: 'Вернитесь в приложение для завершения входа',
-  SignedInWithoutPlan: 'Вход выполнен, подписка не разрешена',
-  Ready: 'Подключено',
-  LoadingModels: 'Загрузка моделей',
-  Refreshing: 'Обновление сессии',
-  Streaming: 'Получение ответа',
-  Completed: 'Запрос успешно завершён',
-  Incomplete: 'Ответ не завершён',
-  Cancelled: 'Операция отменена',
-  SigningOut: 'Выход из аккаунта',
-  Failed: 'Операция не выполнена',
-};
-
-
-
-function SiwcScreen() {
-  const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
-  const [model, setModel] = useState('');
-  const [prompt, setPrompt] = useState('Ответь одним коротким предложением: связь работает.');
-  const [bridgeError, setBridgeError] = useState(false);
-
-  useEffect(() => {
-    let mounted = true;
-    const apply = (raw: string) => {
-      const next = parseSnapshot(raw);
-      if (mounted) {
-        setSnapshot(previous => next.revision >= previous.revision ? next : previous);
-      }
-    };
-    const subscription = NativeSiwc.onSnapshot(apply);
-    NativeSiwc.getSnapshot().then(apply).catch(() => setBridgeError(true));
-    return () => { mounted = false; subscription.remove(); };
-  }, []);
-
-  const act = (action: () => Promise<void>) => {
-    setBridgeError(false);
-    action().catch(() => setBridgeError(true));
-  };
-  const selected = snapshot.models.some(item => item.slug === model)
-    ? model : snapshot.models[0]?.slug ?? '';
-  const errorText = snapshot.error === 'cancelled' ? ''
-    : errors[snapshot.error] ?? (snapshot.error ? `Код ошибки: ${snapshot.error}` : '');
-
-  return (
-    <SafeAreaView style={styles.safe}>
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-        <Text style={styles.eyebrow}>ANDROID · SIWC SPIKE</Text>
-        <Text style={styles.title}>Проверка подписки ChatGPT</Text>
-        <Text style={styles.description}>Вход, разрешение на подписку и один короткий ответ OpenAI.</Text>
-        <View style={styles.card}>
-          <Text accessibilityRole="header" style={styles.heading}>{stages[snapshot.stage] ?? snapshot.stage}</Text>
-          {snapshot.busy && <ActivityIndicator style={styles.spinner} />}
-          {!!snapshot.email && <Text style={styles.text}>{snapshot.email}</Text>}
-          {snapshot.signedIn && !snapshot.email && <Text style={styles.text}>Аккаунт подключён</Text>}
-          <Text style={styles.text}>Подписка: {snapshot.planEnabled ? 'разрешена' : 'не подключена'}</Text>
-          {!!errorText && <Text accessibilityRole="alert" style={styles.error}>{errorText}</Text>}
-          {!!snapshot.error && !!snapshot.responseContentType && <Text style={styles.hint}>
-            HTTP {snapshot.httpStatus} · {snapshot.responseContentType} · {snapshot.responseFormat}
-          </Text>}
-          {bridgeError && <Text accessibilityRole="alert" style={styles.error}>Не удалось выполнить команду. Попробуйте ещё раз.</Text>}
-          <Button title="Continue with ChatGPT" disabled={snapshot.busy}
-            onPress={() => act(() => NativeSiwc.signIn())} />
-          <Text style={styles.hint}>Вход откроется в браузере телефона. После входа вернитесь в приложение.</Text>
-          <Button title="Обновить сессию" disabled={snapshot.busy || !snapshot.signedIn}
-            onPress={() => act(() => NativeSiwc.refreshSession())} />
-          {snapshot.busy && <Button title="Отменить" onPress={() => NativeSiwc.cancel()} />}
-        </View>
-        <View style={styles.card}>
-          <Button title="Загрузить модели" disabled={snapshot.busy || !snapshot.planEnabled}
-            onPress={() => act(() => NativeSiwc.listModels())} />
-          {snapshot.models.map(item => (
-            <Pressable key={item.slug} accessibilityRole="radio" accessibilityState={{checked: item.slug === selected, disabled: snapshot.busy}}
-              disabled={snapshot.busy} style={[styles.model, item.slug === selected && styles.selectedModel]}
-              onPress={() => setModel(item.slug)}>
-              <Text style={styles.text}>{item.slug === selected ? '● ' : '○ '}{item.name}</Text>
-            </Pressable>
-          ))}
-          <Text style={styles.label}>Тестовый запрос</Text>
-          <TextInput accessibilityLabel="Тестовый запрос" multiline maxLength={4000}
-            editable={!snapshot.busy} value={prompt} onChangeText={setPrompt} style={styles.input} />
-          <Button title="Получить ответ" disabled={snapshot.busy || !snapshot.planEnabled || !selected || !prompt.trim()}
-            onPress={() => act(() => NativeSiwc.sendPrompt(selected, prompt))} />
-        </View>
-        {!!snapshot.answer && <View style={styles.card}>
-          <Text style={styles.heading}>Ответ</Text>
-          <Text selectable style={styles.answer}>{snapshot.answer}</Text>
-          <Text style={styles.hint}>{snapshot.stage === 'Completed' ? 'response.completed получен' : 'Завершение ещё не подтверждено'}</Text>
-        </View>}
-        <Button title="Поделиться диагностикой" onPress={() => {
-          Share.share({message: safeDiagnostics(snapshot, String(Platform.Version))}).catch(() => setBridgeError(true));
-        }} />
-        <Button title="Выйти" disabled={snapshot.busy || !snapshot.signedIn}
-          onPress={() => act(() => NativeSiwc.signOut())} />
-        <Text style={styles.hint}>Прототип для локального тестирования. Диагностика не содержит токенов, email и текста ответа.</Text>
-      </ScrollView>
-    </SafeAreaView>
-  );
+import PlayerBar from './src/PlayerBar';
+import SettingsScreen from './src/SettingsScreen';
+import GenerationQueueScreen from './src/GenerationQueueScreen';
+import {useGenerationQueue} from './src/generationQueue';
+import {AppProvider, Button, useApp, useNavigationTheme} from './src/theme';
+type RootRoutes = {Home: undefined; Settings: undefined};
+const Root = createNativeStackNavigator<RootRoutes>();
+function SettingsAction() { const navigation = useNavigation<NativeStackNavigationProp<RootRoutes>>(); return <Button title="⚙" accessibilityLabel="Настройки" variant="quiet" onPress={() => navigation.navigate('Settings')} />; }
+const Tabs = createBottomTabNavigator<{Topics: undefined; Podcasts: {create?: number} | undefined; GenerationQueue: undefined; Playlists: undefined}>();
+const ignoreBusy = (_busy: boolean) => {};
+function PodcastTab() { return <PodcastScreen onBusyChange={ignoreBusy} />; }
+const renderSettingsAction = () => <SettingsAction />;
+function AppTabBar(props: BottomTabBarProps) { return <View><PlayerBar /><BottomTabBar {...props} /></View>; }
+const navStyles = StyleSheet.create({icon: {width: 24, height: 24, justifyContent: 'center', gap: 4}, layer: {width: 19, height: 12, borderWidth: 1.5, borderRadius: 2}, backLayer: {position: 'absolute', top: 2, left: 0}, frontLayer: {position: 'absolute', bottom: 2, right: 0}, bars: {flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3}, bar: {width: 2, borderRadius: 1}, line: {height: 2, width: 21, borderRadius: 1}, clock: {width: 22, height: 22, borderRadius: 11, borderWidth: 1.5}, clockHand: {position: 'absolute', left: 9, top: 3, width: 2, height: 7}, clockMinute: {position: 'absolute', left: 9, top: 8, width: 6, height: 2}});
+function NavIcon({color, kind}: {color: string; kind: 'topic' | 'audio' | 'list' | 'queue'}) {
+  const {colors} = useApp();
+  return <View accessible={false} importantForAccessibility="no-hide-descendants" style={navStyles.icon}>
+    {kind === 'topic' ? <><View style={[navStyles.layer, navStyles.backLayer, {borderColor: color}]} /><View style={[navStyles.layer, navStyles.frontLayer, {borderColor: color, backgroundColor: colors.background}]} /></>
+      : kind === 'audio' ? <View style={navStyles.bars}>{[8, 17, 23, 14, 8].map((height, i) => <View key={i} style={[navStyles.bar, {height, backgroundColor: color}]} />)}</View>
+        : kind === 'queue' ? <View style={[navStyles.clock, {borderColor: color}]}><View style={[navStyles.clockHand, {backgroundColor: color}]} /><View style={[navStyles.clockMinute, {backgroundColor: color}]} /></View>
+          : [0, 1, 2].map(i => <View key={i} style={[navStyles.line, {backgroundColor: color}]} />)}
+  </View>;
 }
-
-export default function App() {
-  const [showSiwc, setShowSiwc] = useState(false);
-  const [podcastBusy, setPodcastBusy] = useState(false);
-  return <SafeAreaProvider>
-    <View style={showSiwc ? styles.hidden : styles.screen}>
-      <PodcastScreen onBusyChange={setPodcastBusy} />
-    </View>
-    {showSiwc && <SiwcScreen />}
-    <SafeAreaView edges={['bottom']}>
-      <Button disabled={podcastBusy} title={showSiwc ? 'Вернуться к подкасту' : 'Настройки SIWC'} onPress={() => setShowSiwc(!showSiwc)} />
-    </SafeAreaView>
-  </SafeAreaProvider>;
+const topicIcon = ({color}: {color: string}) => <NavIcon color={color} kind="topic" />;
+const podcastIcon = ({color}: {color: string}) => <NavIcon color={color} kind="audio" />;
+const playlistIcon = ({color}: {color: string}) => <NavIcon color={color} kind="list" />;
+const queueIcon = ({color}: {color: string}) => <NavIcon color={color} kind="queue" />;
+function Home() { const {colors} = useApp(); const {state} = useGenerationQueue(); return <Tabs.Navigator initialRouteName="Topics" backBehavior="history" tabBar={AppTabBar}
+  screenOptions={{headerShown: false, tabBarActiveTintColor: colors.accent, tabBarInactiveTintColor: colors.muted, tabBarStyle: {backgroundColor: colors.background, borderTopWidth: 0}, tabBarLabelStyle: {fontSize: 12}, tabBarIcon: playlistIcon}}>
+  <Tabs.Screen name="Topics" component={TopicsNavigator} options={{title: 'Топики', tabBarIcon: topicIcon}} />
+  <Tabs.Screen name="Podcasts" component={PodcastTab} options={{title: 'Подкасты', tabBarIcon: podcastIcon}} />
+  <Tabs.Screen name="GenerationQueue" component={GenerationQueueScreen} options={{title: 'Очередь', tabBarIcon: queueIcon, tabBarBadge: state.generationQueue.length || undefined, tabBarBadgeStyle: {backgroundColor: colors.button, color: colors.buttonText}}} />
+  <Tabs.Screen name="Playlists" component={PlaylistsNavigator} options={{title: 'Плейлисты'}} />
+</Tabs.Navigator>; }
+function Navigation() {
+  const theme = useNavigationTheme();
+  return <NavigationContainer theme={theme}><Root.Navigator>
+    <Root.Screen name="Home" component={Home} options={{title: 'PODCAST GENERATOR', headerTitleStyle: {fontSize: 13, fontWeight: '600'}, headerShadowVisible: false, headerRight: renderSettingsAction}} />
+    <Root.Screen name="Settings" component={SettingsScreen} options={{title: 'Настройки'}} />
+  </Root.Navigator></NavigationContainer>;
 }
-
-const styles = StyleSheet.create({
-  screen: {flex: 1},
-  hidden: {display: 'none'},
-  safe: {flex: 1, backgroundColor: '#f3f5f7'},
-  content: {padding: 20, gap: 16, paddingBottom: 40},
-  eyebrow: {fontSize: 11, letterSpacing: 2, color: '#546475', fontWeight: '700'},
-  title: {fontSize: 28, fontWeight: '700', color: '#132638'},
-  description: {fontSize: 16, lineHeight: 23, color: '#526170'},
-  card: {backgroundColor: '#fff', padding: 18, borderRadius: 16, gap: 14},
-  heading: {fontSize: 18, fontWeight: '600', color: '#132638'},
-  text: {fontSize: 15, color: '#263c4f'},
-  label: {fontSize: 14, fontWeight: '600', color: '#263c4f'},
-  hint: {fontSize: 12, lineHeight: 18, color: '#657381'},
-  error: {color: '#ac2525', lineHeight: 21},
-  spinner: {alignSelf: 'flex-start'},
-  input: {minHeight: 90, borderWidth: 1, borderColor: '#ccd5dd', borderRadius: 8, padding: 12, color: '#132638', textAlignVertical: 'top'},
-  model: {padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#e0e5ea'},
-  selectedModel: {borderColor: '#277ca4', backgroundColor: '#eaf5fb'},
-  answer: {fontSize: 17, lineHeight: 26, color: '#132638'},
-});
+export default function App() { return <SafeAreaProvider><AppProvider><Navigation /></AppProvider></SafeAreaProvider>; }
